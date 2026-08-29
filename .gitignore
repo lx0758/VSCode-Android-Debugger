@@ -1,0 +1,41 @@
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# TypeScript
+*.tsbuildinfo
+out/
+.vscode-test/
+
+# Kotlin / Gradle
+build/
+.gradle/
+.kotlin/
+*.class
+
+# Java (legacy Maven)
+target/
+hs_err_pid*
+replay_pid*
+
+# VSCode
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/README.md
+*.vsix
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build outputs (adapter jar should be tracked; extension/resources is the deploy location)
+extension/resources/*.jar
+
+# Logs
+*.log
+
+# Workspace
+workspace/

@@ -1,0 +1,18 @@
+{
+  "displayName": "Android 调试器",
+  "description": "调试 Android Framework / App Java 层代码, 支持 AOSP Source Workspace 和 Remote-SSH 场景",
+  "commands.category.androidDebug": "Android 调试器",
+  "commands.attach.title": "启动调试",
+  "commands.markSourceDir.title": "标记为调试源文件目录",
+  "commands.unmarkSourceDir.title": "取消标记为调试源文件目录",
+  "commands.unmarkFromDir.title": "取消标记",
+  "commands.revealInExplorer.title": "在资源管理器中定位",
+  "commands.restartSession.title": "重启调试会话",
+  "viewsContainer.title": "Android 调试器",
+  "views.sourceDirs.title": "源文件目录",
+  "config.title": "Android 调试器",
+  "config.adbPath.description": "adb 二进制路径, 'auto' 自动探测",
+  "config.javaPath.description": "java 可执行文件路径, 'auto' 自动探测 (JAVA_HOME -> PATH)",
+  "config.index.maxFiles.description": "源索引允许的最大文件数 (默认 10000)。超过时会提示预估时间并询问是否继续",
+  "config.sourceDirs.description": "调试源文件目录路径列表 (相对工作区文件夹), 标记后这些目录下的 Java/Kotlin 源码会参与断点匹配"
+}

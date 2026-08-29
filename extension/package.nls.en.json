@@ -1,0 +1,18 @@
+{
+  "displayName": "Android Debugger",
+  "description": "Debug Java code in Android framework / system apps. Supports AOSP source workspaces and Remote-SSH scenarios.",
+  "commands.category.androidDebug": "Android Debugger",
+  "commands.attach.title": "Launch Debug",
+  "commands.markSourceDir.title": "Mark as Debug Source Folder",
+  "commands.unmarkSourceDir.title": "Unmark as Debug Source Folder",
+  "commands.unmarkFromDir.title": "Unmark",
+  "commands.revealInExplorer.title": "Reveal in Explorer",
+  "commands.restartSession.title": "Restart Debug Session",
+  "viewsContainer.title": "Android Debugger",
+  "views.sourceDirs.title": "Source Dirs",
+  "config.title": "Android Debugger",
+  "config.adbPath.description": "Path to adb binary. 'auto' probes common locations.",
+  "config.javaPath.description": "Path to java binary. 'auto' probes JAVA_HOME, then PATH.",
+  "config.index.maxFiles.description": "Maximum number of files allowed when building the source index (default 10000). When exceeded, the extension will show an estimate and ask for confirmation.",
+  "config.sourceDirs.description": "Debug source dir paths (relative to workspace folder). Java/Kotlin sources under these folders participate in breakpoint matching."
+}

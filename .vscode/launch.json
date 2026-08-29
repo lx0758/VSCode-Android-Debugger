@@ -1,0 +1,33 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run Extension",
+      "type": "extensionHost",
+      "request": "launch",
+      "runtimeExecutable": "${execPath}",
+      "args": [
+        "--disable-extensions",
+        "--extensionDevelopmentPath=${workspaceFolder}/extension",
+        "${workspaceFolder}/workspace/sample.code-workspace"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/extension/out/**/*.js"
+      ],
+      "preLaunchTask": "build: all",
+      "presentation": {
+        "reveal": "silent"
+      }
+    },
+    {
+      "name": "Package VSIX",
+      "type": "node",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/copy-adapter.js",
+      "preLaunchTask": "package: vsix",
+      "presentation": {
+        "reveal": "silent"
+      }
+    }
+  ]
+}

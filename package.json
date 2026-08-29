@@ -1,0 +1,16 @@
+{
+  "name": "debugger-for-android-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Monorepo for Android Java Debugger (VSCode extension + Java adapter)",
+  "scripts": {
+    "build:adapter": "node scripts/build-adapter.js",
+    "copy:adapter": "node scripts/copy-adapter.js",
+    "install:extension": "npm --prefix extension install --no-audit --no-fund",
+    "build:extension": "npm --prefix extension run build",
+    "tsc:watch": "npm --prefix extension run watch",
+    "build": "node scripts/build-all.js",
+    "package": "npm --prefix extension run package",
+    "test": "npm --prefix extension test"
+  }
+}

@@ -1,0 +1,217 @@
+{
+  "name": "debugger-for-android",
+  "displayName": "%displayName%",
+  "description": "%description%",
+  "version": "0.1.0",
+  "author": "6xyun",
+  "publisher": "6xyun",
+  "icon": "resources/icon.png",
+  "extensionKind": ["ui", "workspace"],
+  "homepage": "https://github.com/lx0758/debugger-for-android#readme",
+  "repository": {
+      "type": "git",
+      "url": "git+https://github.com/lx0758/debugger-for-android.git"
+  },
+  "bugs": {
+      "url": "https://github.com/lx0758/debugger-for-android/issues"
+  },
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.87.0"
+  },
+  "categories": [
+    "Debuggers"
+  ],
+  "keywords": [
+    "android",
+    "aosp",
+    "framework",
+    "jdwp",
+    "jdi",
+    "debugger"
+  ],
+  "__i18n__": {
+    "sourceLanguage": "en",
+    "languages": [
+      "zh-cn"
+    ],
+    "encoding": "utf-8"
+  },
+  "activationEvents": [
+    "onStartupFinished",
+    "workspaceContains:**/*.java",
+    "workspaceContains:**/*.kt"
+  ],
+  "main": "./out/extension.js",
+  "l10n": "./l10n",
+  "contributes": {
+    "commands": [
+      {
+        "command": "debugger-for-android.attach",
+        "title": "%commands.attach.title%",
+        "category": "%commands.category.androidDebug%",
+        "icon": "$(debug-start)"
+      },
+      {
+        "command": "debugger-for-android.restartSession",
+        "title": "%commands.restartSession.title%",
+        "category": "%commands.category.androidDebug%",
+        "icon": "$(debug-rerun)"
+      },
+      {
+        "command": "debugger-for-android.markSourceDir",
+        "title": "%commands.markSourceDir.title%"
+      },
+      {
+        "command": "debugger-for-android.unmarkSourceDir",
+        "title": "%commands.unmarkSourceDir.title%"
+      },
+      {
+        "command": "debugger-for-android.unmarkFromDir",
+        "title": "%commands.unmarkFromDir.title%",
+        "icon": "$(close)",
+        "category": "%commands.category.androidDebug%"
+      },
+      {
+        "command": "debugger-for-android.revealInExplorer",
+        "title": "%commands.revealInExplorer.title%",
+        "icon": "$(folder-open)",
+        "category": "%commands.category.androidDebug%"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        { "command": "debugger-for-android.markSourceDir", "when": "false" },
+        { "command": "debugger-for-android.unmarkSourceDir", "when": "false" },
+        { "command": "debugger-for-android.unmarkFromDir", "when": "false" },
+        { "command": "debugger-for-android.revealInExplorer", "when": "false" },
+        { "command": "debugger-for-android.restartSession", "when": "debugType == 'android-java'" }
+      ],
+      "explorer/context": [
+        {
+          "command": "debugger-for-android.markSourceDir",
+          "when": "explorerResourceIsFolder && !(resourcePath in debugger-for-android.sourceDirPaths)",
+          "group": "androidDebug@10"
+        },
+        {
+          "command": "debugger-for-android.unmarkSourceDir",
+          "when": "explorerResourceIsFolder && resourcePath in debugger-for-android.sourceDirPaths",
+          "group": "androidDebug@11"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "debugger-for-android.revealInExplorer",
+          "when": "viewItem == dir && view == debugger-for-android.sourceDirs",
+          "group": "navigation@1"
+        },
+        {
+          "command": "debugger-for-android.unmarkFromDir",
+          "when": "viewItem == dir && view == debugger-for-android.sourceDirs",
+          "group": "navigation@2"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "debugger-for-android.attach",
+          "when": "view == debugger-for-android.sourceDirs",
+          "group": "navigation",
+          "icon": "$(debug-alt)"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+      {
+        "id": "debugger-for-android-explorer",
+        "title": "%viewsContainer.title%",
+        "icon": "resources/icon_android.svg"
+      }
+      ]
+    },
+    "views": {
+      "debugger-for-android-explorer": [
+        {
+          "id": "debugger-for-android.sourceDirs",
+          "name": "%views.sourceDirs.title%",
+          "icon": "resources/icon_android.svg"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "%config.title%",
+      "properties": {
+        "debugger-for-android.adbPath": {
+          "type": "string",
+          "default": "auto",
+          "description": "%config.adbPath.description%"
+        },
+        "debugger-for-android.javaPath": {
+          "type": "string",
+          "default": "auto",
+          "description": "%config.javaPath.description%"
+        },
+        "debugger-for-android.index.maxFiles": {
+          "type": "number",
+          "default": 10000,
+          "minimum": 100,
+          "description": "%config.index.maxFiles.description%"
+        }
+      }
+    },
+    "breakpoints": [
+      {
+        "language": "java"
+      },
+      {
+        "language": "kotlin"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "android-java",
+        "label": "Android Java Debugger",
+        "languages": ["java", "kotlin"],
+        "configurationAttributes": {
+          "attach": {
+            "required": ["hostName", "port"],
+            "properties": {
+              "hostName": {
+                "type": "string",
+                "description": "JDI target host (where adb forward points)",
+                "default": "localhost"
+              },
+              "port": {
+                "type": "number",
+                "description": "JDI target port (adb forward tcp:<port> jdwp:<pid>)",
+                "default": 5037
+              },
+              "project": {
+                "type": "string",
+                "description": "Optional workspace folder name to associate with the session"
+              }
+            }
+          }
+        }
+      }
+    ]
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "watch": "tsc -p . -w",
+    "lint": "eslint src --ext ts",
+    "test": "node ./out/test/runTest.js",
+    "vscode:prepublish": "npm --prefix ../ run build",
+    "package": "vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.87.0",
+    "@typescript-eslint/eslint-plugin": "^6.19.0",
+    "@typescript-eslint/parser": "^6.19.0",
+    "eslint": "^8.56.0",
+    "typescript": "^5.3.3",
+    "@vscode/test-electron": "^2.3.8",
+    "@vscode/vsce": "^2.22.0"
+  }
+}
