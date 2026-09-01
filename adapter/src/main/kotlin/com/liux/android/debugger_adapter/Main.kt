@@ -8,7 +8,6 @@ import com.liux.android.debugger_adapter.transport.TcpTransport
 import com.liux.android.debugger_adapter.transport.openStdioStream
 import com.liux.android.debugger_adapter.transport.openTcpStream
 import com.liux.android.debugger_adapter.transport.readMessages
-import com.google.gson.JsonArray
 import com.google.gson.JsonParser
 import java.net.ServerSocket
 import java.util.concurrent.ExecutorService
@@ -18,7 +17,11 @@ import java.util.concurrent.TimeUnit
 object Main
 
 fun main(args: Array<String>) {
-    Logging.info("Adapter 启动")
+    // TCP mode (--port=) owns no stdio DAP channel, so route Logging output
+    // to stdout; stderr stays protocol-safe for stdio mode and keeps
+    // carrying only JVM-level noise. Must run before the first log line.
+    if (args.any { it.startsWith("--port=") }) Logging.useStdout()
+    Logging.info("[Main] Adapter 启动")
     val executor = Executors.newCachedThreadPool { r ->
         Thread(r, "dap-handler").apply { isDaemon = true }
     }
@@ -35,56 +38,19 @@ fun main(args: Array<String>) {
     val jdwpPortArg = args.firstOrNull { it.startsWith("--jdwp-port=") }
     val jdwpPortOverride = jdwpPortArg?.removePrefix("--jdwp-port=")?.toIntOrNull()
 
-    val initialIndex = loadInitialIndex(args)
-
     if (explicitPort != null) {
-        runTcp(explicitPort, executor, initialIndex, jdwpPortOverride)
+        runTcp(explicitPort, executor, jdwpPortOverride)
     } else {
-        runStdio(executor, initialIndex, jdwpPortOverride)
-    }
-}
-
-/**
- * Read pre-built FQN→file index entries written by the extension (see
- * `runAttachCommand` in `extension/src/commands/attach.ts`). Loading the
- * index BEFORE the adapter starts listening for DAP requests guarantees that
- * when VSCode fires its automatic `setBreakpoints` right after `attach`, the
- * adapter can resolve source paths to FQNs and return real breakpoint ids —
- * otherwise the BPs come back as id=0, verified=false, and stay "unverified"
- * for the rest of the session.
- */
-private fun loadInitialIndex(args: Array<String>): List<Map<String, String>> {
-    val indexFileArg = args.firstOrNull { it.startsWith("--index-file=") }
-        ?: return emptyList()
-    val path = indexFileArg.removePrefix("--index-file=")
-    return try {
-        val json = java.io.File(path).readText(Charsets.UTF_8)
-        val arr = JsonParser.parseString(json).asJsonArray
-        val list = ArrayList<Map<String, String>>(arr.size())
-        for (el in arr) {
-            val obj = el.asJsonObject
-            list += mapOf(
-                "fqn" to (obj.get("fqn")?.asString ?: ""),
-                "file" to (obj.get("file")?.asString ?: ""),
-            )
-        }
-        Logging.info("从 $path 加载了 ${list.size} 条索引")
-        list
-    } catch (e: Exception) {
-        Logging.error("加载初始索引失败: $path", e)
-        emptyList()
-    } finally {
-        runCatching { java.io.File(path).delete() }
+        runStdio(executor, jdwpPortOverride)
     }
 }
 
 private fun runStdio(
     executor: ExecutorService,
-    initialIndex: List<Map<String, String>>,
     jdwpPortOverride: Int?,
 ) {
     val transport: MessageTransport = StdioTransport()
-    val server = DapServer(executor, transport, initialIndex, jdwpPortOverride)
+    val server = DapServer(executor, transport, jdwpPortOverride)
     try {
         readMessages(
             openStdioStream(),
@@ -108,13 +74,11 @@ private fun runStdio(
 private fun runTcp(
     port: Int,
     executor: ExecutorService,
-    initialIndex: List<Map<String, String>>,
     jdwpPortOverride: Int?,
 ) {
     val serverSocket = ServerSocket(port)
-    Logging.info("Adapter TCP 模式, listening on 0.0.0.0:$port (jdwp-port=${jdwpPortOverride ?: "<from-attach-request>"})")
-    System.err.println("READY port=$port")
-    System.err.flush()
+    Logging.info("[Main] TCP 模式, listening on 0.0.0.0:$port (jdwp-port=${jdwpPortOverride ?: "<from-attach-request>"})")
+    Logging.info("[Main] READY port=$port")
 
     while (!Thread.currentThread().isInterrupted) {
         val client = try {
@@ -129,7 +93,7 @@ private fun runTcp(
         }
         Thread({
             val transport: MessageTransport = TcpTransport(client)
-            val server = DapServer(sessionExecutor, transport, initialIndex, jdwpPortOverride)
+            val server = DapServer(sessionExecutor, transport, jdwpPortOverride)
             try {
                 readMessages(
                     openTcpStream(client),

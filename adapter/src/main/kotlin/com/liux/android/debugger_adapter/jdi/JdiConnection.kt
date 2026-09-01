@@ -21,7 +21,7 @@ class JdiConnection(private val host: String, private val port: Int) {
         args["hostname"]?.setValue(host)
         args["port"]?.setValue(port.toString())
         args["timeout"]?.setValue("10000")
-        Logging.info("连接到 $host:$port via ${connector.name()}")
+        Logging.info("[JDI] 连接到 $host:$port via ${connector.name()}")
         val machine = connector.attach(args)
         vm = machine
         attached.set(true)
@@ -33,7 +33,7 @@ class JdiConnection(private val host: String, private val port: Int) {
     fun close() {
         if (attached.compareAndSet(true, false)) {
             vm?.let {
-                try { it.dispose() } catch (e: Exception) { Logging.warn("vm.dispose 失败: ${e.message}") }
+                try { it.dispose() } catch (e: Exception) { Logging.warn("[JDI] vm.dispose 失败: ${e.message}") }
             }
             vm = null
         }

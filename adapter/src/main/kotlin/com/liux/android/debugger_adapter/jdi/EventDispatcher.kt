@@ -33,7 +33,7 @@ class EventDispatcher(
     }
 
     override fun run() {
-        Logging.info("EventDispatcher 启动")
+        Logging.info("[Event] 启动")
         while (running.get()) {
             try {
                 // EventQueue.remove(timeout) returns null when the timeout
@@ -59,14 +59,14 @@ class EventDispatcher(
                 Thread.currentThread().interrupt()
                 break
             } catch (e: com.sun.jdi.VMDisconnectedException) {
-                Logging.info("VM 已断开连接")
+                Logging.info("[Event] VM 已断开连接")
                 eventHandler(DapEvent("terminated", null, null))
                 break
             } catch (e: Exception) {
-                Logging.error("EventDispatcher 异常", e)
+                Logging.error("[Event] 异常", e)
             }
         }
-        Logging.info("EventDispatcher 停止")
+        Logging.info("[Event] 停止")
     }
 
     private fun handleEvent(event: Event, set: EventSet) {

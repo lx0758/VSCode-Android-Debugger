@@ -113,5 +113,7 @@
   "No active Android Debugger session. Run \"Attach Debugger to Android Process\" first.": "没有活动的 Android 调试器会话。请先运行\"附加调试器到 Android 进程\"。",
   "Active Android Debugger session has no target PID recorded (started by an older extension version). Detach and re-attach to use Restart.": "活动的 Android 调试器会话没有目标 PID 记录(由旧版本启动)。请先分离再重新 attach 以使用重启功能。",
   "Could not open the Android Debugger sidebar automatically. Click the \"Android Debugger\" icon in the Activity Bar (left side) to open it.": "无法自动打开 Android 调试器侧栏。请点击 Activity Bar (左侧) 中的 \"Android 调试器\" 图标打开。",
-  "Mark a source folder now": "立即标记源文件夹"
+  "Mark a source folder now": "立即标记源文件夹",
+  "Select Android device": "选择 Android 设备",
+  "Pick a device to attach": "选择要 attach 的设备"
 }

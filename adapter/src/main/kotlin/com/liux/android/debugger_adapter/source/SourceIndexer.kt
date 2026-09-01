@@ -14,7 +14,7 @@ class SourceIndexer {
             val file = entry["file"] ?: continue
             if (fqn.isEmpty() || file.isEmpty()) continue
             val packageName = fqn.substringBeforeLast('.', "")
-            index.add(FileEntry(file, packageName, listOf(fqn)))
+            index.add(FileEntry(file, packageName, listOf(fqn), entry["sourceUri"]))
         }
     }
 

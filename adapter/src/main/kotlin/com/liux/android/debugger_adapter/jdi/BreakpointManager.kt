@@ -1,6 +1,7 @@
 package com.liux.android.debugger_adapter.jdi
 
 import com.liux.android.debugger_adapter.protocol.Logging
+import com.liux.android.debugger_adapter.util.sourceBasename
 import com.sun.jdi.AbsentInformationException
 import com.sun.jdi.Location
 import com.sun.jdi.Method
@@ -22,7 +23,7 @@ class BreakpointManager(private val vm: VirtualMachine) {
     // must include the same id that was returned in the corresponding
     // `setBreakpoints` response, otherwise VSCode cannot correlate the event
     // back to the user's UI breakpoint. Reusing ids across re-sets (e.g. when
-    // `syncBreakpoints` runs after a class loads) keeps the correlation intact.
+    // `custom/syncBreakpoints` runs after a class loads) keeps the correlation intact.
     private val pathLineToId = HashMap<String, MutableMap<Int, Int>>()
     // Reverse map: EventRequest → adapter id. Uses IdentityHashMap because
     // JDI's `Mirror.equals` is structural (class + VM), which means every
@@ -49,7 +50,7 @@ class BreakpointManager(private val vm: VirtualMachine) {
      * is recorded in `pathLineToId` so subsequent calls with the same
      * (file, line) reuse it instead of allocating a fresh one — this keeps
      * the adapter id stable across `setBreakpoints` and the later
-     * `syncBreakpoints` replay, which VSCode needs to correlate
+     * `custom/syncBreakpoints` replay, which VSCode needs to correlate
      * `breakpoint` events back to the UI BP.
      */
     fun setBreakpointWithId(
@@ -77,7 +78,7 @@ class BreakpointManager(private val vm: VirtualMachine) {
         metaById[bpId] = BreakpointMeta(filePath, line, condition, logMessage)
         activeRequests[bpId] = req
         requestToId[req] = bpId
-        Logging.info("断点已设置: id=$bpId ${refType.name()}:${location.codeIndex()}")
+        Logging.info("[BP] 断点已设置: id=$bpId ${refType.name()}:${location.codeIndex()}")
     }
 
     fun setBreakpoint(
@@ -106,7 +107,7 @@ class BreakpointManager(private val vm: VirtualMachine) {
         metaById[id] = BreakpointMeta(filePath, line, condition, logMessage)
         activeRequests[id] = req
         requestToId[req] = id
-        Logging.info("断点已设置: id=$id ${refType.name()}:${location.codeIndex()}")
+        Logging.info("[BP] 断点已设置: id=$id ${refType.name()}:${location.codeIndex()}")
         return id
     }
 
@@ -185,7 +186,7 @@ class BreakpointManager(private val vm: VirtualMachine) {
      * the class-prepare handler — we already know the freshly-loaded class
      * exactly, so checking it directly is O(1) vs O(N) for the broad scan.
      * Caller passes `null` from non-class-prepare paths (setBreakpoints,
-     * syncBreakpoints, drainPendingBps) where we DO need the broad scan.
+     * custom/syncBreakpoints, drainPendingBps) where we DO need the broad scan.
      */
     fun findLocationsForLine(
         filePath: String,
@@ -193,7 +194,9 @@ class BreakpointManager(private val vm: VirtualMachine) {
         indexedFqns: List<String>,
         hintType: ReferenceType? = null,
     ): List<Pair<ReferenceType, Location>> {
-        val sourceFileName = filePath.substringAfterLast(java.io.File.separatorChar)
+        // Platform-independent: keys may be posix (remote workspace) or
+        // Windows (local) regardless of the host OS the adapter runs on.
+        val sourceFileName = sourceBasename(filePath)
         val results = mutableListOf<Pair<ReferenceType, Location>>()
         val seen = HashSet<ReferenceType>()
 

@@ -1,6 +1,5 @@
 // extension/src/ui/statusBar.ts
 import * as vscode from 'vscode';
-import { SourceDirsManager } from '../source/dirs';
 import { t } from '../i18n/strings';
 
 export type DebugState = 'idle' | 'indexing' | 'attaching' | 'attached' | 'error';
@@ -10,7 +9,7 @@ export class StatusBarManager {
   private item: vscode.StatusBarItem;
   private countItem: vscode.StatusBarItem;
   private indexerModeItem: vscode.StatusBarItem;
-  private dirsManager: SourceDirsManager | undefined;
+  private getDirs: (() => Promise<string[]>) | undefined;
 
   constructor() {
     this.item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
@@ -27,17 +26,18 @@ export class StatusBarManager {
     this.setState('idle');
   }
 
-  setDirsManager(manager: SourceDirsManager): void {
-    this.dirsManager = manager;
+  /** Bridge callback: supplies the marked-dirs snapshot for the count item. */
+  setDirsProvider(provider: () => Promise<string[]>): void {
+    this.getDirs = provider;
     this.refreshCount();
   }
 
   async refreshCount(): Promise<void> {
-    if (!this.dirsManager) {
+    if (!this.getDirs) {
       this.countItem.hide();
       return;
     }
-    const dirs = await this.dirsManager.getAllDirs();
+    const dirs = await this.getDirs();
     const count = dirs.length;
     const useZh = vscode.env.language.startsWith('zh');
     this.countItem.text = useZh

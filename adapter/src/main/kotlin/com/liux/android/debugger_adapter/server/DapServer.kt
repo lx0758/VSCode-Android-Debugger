@@ -11,6 +11,7 @@ import com.liux.android.debugger_adapter.source.SourceIndexer
 import com.liux.android.debugger_adapter.transport.MessageTransport
 import com.liux.android.debugger_adapter.util.DtoTypes
 import com.liux.android.debugger_adapter.util.HelpText
+import com.liux.android.debugger_adapter.util.sourceBasename
 import com.google.gson.JsonArray
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
@@ -27,7 +28,6 @@ import java.util.concurrent.ExecutorService
 class DapServer(
     private val executor: ExecutorService,
     private val transport: MessageTransport,
-    initialIndexEntries: List<Map<String, String>> = emptyList(),
     /**
      * When set, the adapter uses this port for the JDI `SocketAttach`
      * connection instead of the `port` field carried in the DAP `attach`
@@ -44,20 +44,6 @@ class DapServer(
     private val indexer = SourceIndexer()
     private val exprEvaluator = ExpressionEvaluator()
     private val varFormatter = VariableFormatter()
-
-    init {
-        // Seed the source index before any DAP request can reach us. The
-        // extension builds the index from the user's marked source dirs and
-        // passes the entries via the adapter's command-line (see Main.kt). If
-        // VSCode sends setBreakpoints before the index is seeded (which it
-        // does, automatically), every BP comes back as id=0, verified=false,
-        // and the resulting "unverified" UI state cannot be fixed later by
-        // sending `breakpoint` events — VSCode has no record of the BP ids.
-        if (initialIndexEntries.isNotEmpty()) {
-            indexer.add(initialIndexEntries)
-            Logging.info("已加载初始索引: ${initialIndexEntries.size} entries")
-        }
-    }
 
     private var jdi: JdiConnection? = null
     private var bpManager: BreakpointManager? = null
@@ -81,7 +67,7 @@ class DapServer(
      * backed by the VM's live class table; if a class is loaded by the target
      * process while we iterate one of those lists, we get a
      * ConcurrentModificationException. This actually happened in the wild —
-     * `setBreakpoints` and `syncBreakpoints` running on different executor
+     * `setBreakpoints` and `custom/syncBreakpoints` running on different executor
      * threads both called `findLocationsForLine` at the same time, the app
      * loaded a class mid-iteration, and the adapter crashed with CME.
      *
@@ -91,7 +77,7 @@ class DapServer(
      * entry point) and `handleJdiEvent()` (the event entry point) is enough
      * — every other JDI call is reachable through one of those two.
      *
-     * Non-JDI DAP work (loadedSources, sourceDirs/set, configurationDone,
+     * Non-JDI DAP work (loadedSources, custom/syncSourceIndex, configurationDone,
      * initialize) doesn't need the lock; we keep those handlers
      * lock-free for parallel throughput. The few that don't need JDI run
      * inside `dispatch()` but contend on the lock briefly — acceptable.
@@ -107,6 +93,15 @@ class DapServer(
     private val bpIdSeq = java.util.concurrent.atomic.AtomicInteger(1)
     private val bpIdRegistry = HashMap<String, MutableMap<Int, Int>>()
     private val pendingJdiBps = mutableListOf<PendingBp>()
+
+    /**
+     * normalized canonical key → the path form VSCode sent us (full
+     * `vscode-remote://...` URI in remote windows, fsPath locally). All
+     * DAP echoes (breakpoint events, stopped events) MUST use this form —
+     * a bare posix key renders as `\home\...` on a Windows client and
+     * never resolves back to a file.
+     */
+    private val displayPathByFile = HashMap<String, String>()
 
     private data class PendingBp(
         val id: Int,
@@ -132,14 +127,14 @@ class DapServer(
     private fun handleRequest(req: JsonObject) {
         val command = req.get("command").asString
         val seq = req.get("seq").asInt
-        Logging.info("收到请求: $command (seq=$seq)")
+        Logging.info("[Server] 收到请求: $command (seq=$seq)")
         executor.execute {
             try {
                 val args = req.get("arguments")?.asJsonObject ?: JsonObject()
                 val body = dispatch(command, args)
                 sendResponse(seq, command, true, null, body)
             } catch (e: Exception) {
-                Logging.error("处理请求失败: $command", e)
+                Logging.error("[Server] 处理请求失败: $command", e)
                 sendResponse(seq, command, false, e.message, null)
             }
         }
@@ -161,15 +156,14 @@ class DapServer(
             "stepIn" -> handleStepIn(args)
             "stepOut" -> handleStepOut(args)
             "pause" -> handlePause(args)
-            "sourceDirs/set" -> handleSourceDirsSet(args)
-            "sourceDirs/add" -> handleSourceDirsAdd(args)
             "evaluate" -> handleEvaluate(args)
             "setVariable" -> handleSetVariable(args)
             "setExpression" -> handleSetExpression(args)
             "loadedSources" -> handleLoadedSources(args)
-            "syncBreakpoints" -> handleSyncBreakpoints(args)
+            "custom/syncBreakpoints" -> handleSyncBreakpoints(args)
+            "custom/syncSourceIndex" -> handleSyncSourceIndex(args)
             else -> {
-                Logging.warn("未实现请求: $command")
+                Logging.warn("[Server] 未实现请求: $command")
                 JsonObject()
             }
         }
@@ -193,7 +187,7 @@ class DapServer(
         // atomic teardown policy).
         val port = jdwpPortOverride ?: portFromRequest
         if (jdwpPortOverride != null && jdwpPortOverride != portFromRequest) {
-            Logging.info("handleAttach: 使用 --jdwp-port 覆盖 DAP 请求的 port ($portFromRequest → $port)")
+            Logging.info("[Server] handleAttach: 使用 --jdwp-port 覆盖 DAP 请求的 port ($portFromRequest → $port)")
         }
         val conn = JdiConnection(host, port)
         val vm = conn.attach()
@@ -201,6 +195,26 @@ class DapServer(
         bpManager = BreakpointManager(vm)
         stepController = StepController(vm)
         eventDispatcher = EventDispatcher(vm.eventQueue()) { event -> handleJdiEvent(event) }.also { it.start() }
+
+        // Load the initial source index from the DAP `attach` request's
+        // `arguments.fqnInfo` field (sent by the extension as a JSON array
+        // of {fqn, file} entries). MUST happen BEFORE drainPendingBps() —
+        // VSCode may have already queued setBreakpoints while we were
+        // connecting, and those BPs need an indexed SourceIndex to resolve
+        // on the first drain pass.
+        val fqnInfo = args.get("fqnInfo")?.asJsonArray
+        if (fqnInfo != null && fqnInfo.size() > 0) {
+            val list = ArrayList<Map<String, String>>(fqnInfo.size())
+            for (el in fqnInfo) {
+                val obj = el.asJsonObject
+                list += mapOf(
+                    "fqn" to (obj.get("fqn")?.asString ?: ""),
+                    "file" to (obj.get("file")?.asString ?: ""),
+                )
+            }
+            indexer.add(list)
+            Logging.info("[Server] handleAttach: 从 arguments.fqnInfo 加载 ${list.size} 条索引")
+        }
 
         // VSCode fires setBreakpoints BEFORE attach, so those BPs were
         // answered with verified=false because bpManager did not yet
@@ -221,7 +235,7 @@ class DapServer(
      */
     private fun drainPendingBps() {
         if (pendingJdiBps.isEmpty()) return
-        Logging.info("draining ${pendingJdiBps.size} deferred BPs after attach")
+        Logging.info("[Server] draining ${pendingJdiBps.size} deferred BPs after attach")
         val toProcess = pendingJdiBps.toList()
         pendingJdiBps.clear()
         for (pb in toProcess) {
@@ -230,7 +244,7 @@ class DapServer(
             // BPs and we don't want each one burning a synchronous stderr
             // flush during startup.
             Logging.debug {
-                "drain bp id=${pb.id} file=${pb.filePath} line=${pb.line} placed=$placed reason=$reason"
+                "[Server] drain bp id=${pb.id} file=${pb.filePath} line=${pb.line} placed=$placed reason=$reason"
             }
             if (placed) {
                 sendEvent(
@@ -279,7 +293,7 @@ class DapServer(
         if (reachable.isEmpty()) return
 
         Logging.debug(
-            "class-prepare $loadedClassName: ${reachable.size}/${pendingJdiBps.size} pending BPs match"
+            "[Server] class-prepare $loadedClassName: ${reachable.size}/${pendingJdiBps.size} pending BPs match"
         )
 
         for (pb in reachable) {
@@ -287,7 +301,7 @@ class DapServer(
             if (placed) {
                 pendingJdiBps.removeAll { it.id == pb.id }
                 Logging.info(
-                    "class-prepare $loadedClassName 命中 pending bp: " +
+                    "[Server] class-prepare $loadedClassName 命中 pending bp: " +
                         "id=${pb.id} file=${pb.filePath} line=${pb.line}"
                 )
                 sendEvent(
@@ -296,7 +310,7 @@ class DapServer(
                 )
             } else {
                 Logging.debug(
-                    "class-prepare $loadedClassName: bp id=${pb.id} 仍未匹配: $reason"
+                    "[Server] class-prepare $loadedClassName: bp id=${pb.id} 仍未匹配: $reason"
                 )
             }
         }
@@ -322,14 +336,18 @@ class DapServer(
         return JsonObject()
     }
 
-    private fun handleSourceDirsSet(args: JsonObject): JsonObject {
+    private fun handleSyncSourceIndex(args: JsonObject): JsonObject {
         val entries = args.get("entries")?.asJsonArray ?: JsonArray()
         val list = (0 until entries.size()).map { i ->
             val obj = entries[i].asJsonObject
-            mapOf(
+            val m = mutableMapOf(
                 "fqn" to obj.get("fqn").asString,
                 "file" to obj.get("file").asString
             )
+            // Optional: the form VSCode resolves when echoed back as DAP
+            // source.path (full vscode-remote:// URI for remote windows).
+            obj.get("sourceUri")?.takeUnless { it.isJsonNull }?.asString?.let { m["sourceUri"] = it }
+            m
         }
 
         // Compare file sets BEFORE replacing the index. Any file in oldFiles
@@ -355,27 +373,6 @@ class DapServer(
         return JsonObject().apply { addProperty("indexedClasses", indexer.sourceIndex().size()) }
     }
 
-    private fun handleSourceDirsAdd(args: JsonObject): JsonObject {
-        val entries = args.get("entries")?.asJsonArray ?: JsonArray()
-        val list = (0 until entries.size()).map { i ->
-            val obj = entries[i].asJsonObject
-            mapOf(
-                "fqn" to obj.get("fqn").asString,
-                "file" to obj.get("file").asString
-            )
-        }
-        val oldFiles = indexer.sourceIndex().entries().map { it.path }.toSet()
-        indexer.add(list)
-        val newFiles = indexer.sourceIndex().entries().map { it.path }.toSet()
-        // Only newly-appearing files are interesting; existing files don't
-        // need re-verification since their BPs were already placed when the
-        // index first saw them.
-        for (filePath in newFiles - oldFiles) {
-            tryPlaceBreakpointsForFile(filePath)
-        }
-        return JsonObject().apply { addProperty("indexedClasses", indexer.sourceIndex().size()) }
-    }
-
     /**
      * Mark every BP tracked for `filePath` as unverified: tear down the JDI
      * request so it stops firing, but KEEP the bpIdRegistry entry so the
@@ -390,18 +387,10 @@ class DapServer(
             if (pendingJdiBps.none { it.id == id }) {
                 pendingJdiBps.add(PendingBp(id, filePath, line, null, null))
             }
-            Logging.info("源目录移除, BP 转未验证: id=$id file=$filePath line=$line")
+            Logging.info("[Server] 源目录移除, BP 转未验证: id=$id file=$filePath line=$line")
             sendEvent(
                 "breakpoint",
-                JsonObject().apply {
-                    addProperty("reason", "changed")
-                    add("breakpoint", JsonObject().apply {
-                        addProperty("id", id)
-                        addProperty("verified", false)
-                        addProperty("line", line)
-                        addProperty("message", message)
-                    })
-                }
+                DtoTypes.breakpointEvent(id, false, line, displayPathFor(filePath), message)
             )
         }
     }
@@ -418,39 +407,54 @@ class DapServer(
             val (placed, _) = tryPlaceBp(filePath, line, null, null)
             if (placed) {
                 pendingJdiBps.removeAll { it.id == id }
-                Logging.info("源目录新增后, BP 重新验证: id=$id file=$filePath line=$line")
+                Logging.info("[Server] 源目录新增后, BP 重新验证: id=$id file=$filePath line=$line")
                 sendEvent(
                     "breakpoint",
-                    JsonObject().apply {
-                        addProperty("reason", "changed")
-                        add("breakpoint", JsonObject().apply {
-                            addProperty("id", id)
-                            addProperty("verified", true)
-                            addProperty("line", line)
-                        })
-                    }
+                    DtoTypes.breakpointEvent(id, true, line, displayPathFor(filePath), null)
                 )
             }
         }
     }
 
+    /**
+     * Canonicalize a source path into the same key space the extension's
+     * source index uses (`file:` URIs → fsPath form; everything else → the
+     * URI path). VSCode sends `source.path` as a full URI in remote windows
+     * (e.g. `vscode-remote://ssh-remote%2Bhost/home/liux/X.java`), while the
+     * custom/syncSourceIndex entries use the bare posix path `/home/liux/X.java`
+     * — without normalization `resolveFqnsByFile` would never match.
+     */
+    private fun normalizeSourcePath(raw: String): String {
+        val m = Regex("^([A-Za-z][A-Za-z0-9+.-]*)://([^/]*)(/.*)$").find(raw) ?: return raw
+        val (scheme, _, path) = m.destructured
+        if (scheme == "file" && Regex("^/[A-Za-z]:/").matches(path)) {
+            // Windows drive form `file:///C:/x` → `C:/x`
+            return path.substring(1)
+        }
+        return path
+    }
+
     private fun handleSetBreakpoints(args: JsonObject): JsonObject {
         val src = args.get("source")?.asJsonObject ?: JsonObject()
-        val filePath = src.get("path")?.asString ?: ""
+        val rawPath = src.get("path")?.asString ?: ""
+        val filePath = normalizeSourcePath(rawPath)
+        if (filePath.isNotEmpty()) {
+            displayPathByFile[filePath] = rawPath
+        }
         val bps = args.get("breakpoints")?.asJsonArray ?: JsonArray()
 
-        Logging.info("setBreakpoints file=$filePath lines=${bps.map { it.asJsonObject.get("line")?.asInt }}")
+        Logging.info("[Server] setBreakpoints file=$filePath lines=${bps.map { it.asJsonObject.get("line")?.asInt }}")
 
         // Clear JDI BPs for this file. DO NOT touch bpIdRegistry — see
         // handleSyncBreakpoints for the state machine: DISABLE preserves the
         // id (so re-enable can reuse it), REMOVE clears the id via the diff.
         // DAP's setBreakpoints cannot distinguish disable from remove (both
-        // arrive as lines=[]); the disambiguation happens in syncBreakpoints
+        // arrive as lines=[]); the disambiguation happens in custom/syncBreakpoints
         // driven by e.changed vs e.removed.
         bpManager?.clearBreakpointsForFile(filePath)
 
         val fqns = indexer.sourceIndex().resolveFqnsByFile(filePath)
-        Logging.info("setBreakpoints resolved FQNs=$fqns")
+        Logging.info("[Server] setBreakpoints resolved FQNs=$fqns")
 
         val resultBps = JsonArray()
         for (bpEl in bps) {
@@ -460,7 +464,7 @@ class DapServer(
             val logMessage = bp.get("logMessage")?.takeUnless { it.isJsonNull }?.asString
 
             // Reuse id if already in registry (setBreakpoints fires after
-            // syncBreakpoints placed the BP), allocate only for fresh adds.
+            // custom/syncBreakpoints placed the BP), allocate only for fresh adds.
             val bpId = bpIdRegistry
                 .getOrPut(filePath) { mutableMapOf() }
                 .getOrPut(line) { bpIdSeq.getAndIncrement() }
@@ -469,7 +473,7 @@ class DapServer(
             if (!placed) {
                 pendingJdiBps.add(PendingBp(bpId, filePath, line, condition, logMessage))
             }
-            Logging.info("setBreakpoints line=$line id=$bpId verified=$placed reason=$reason file=$filePath")
+            Logging.info("[Server] setBreakpoints line=$line id=$bpId verified=$placed reason=$reason file=$filePath")
             resultBps.add(DtoTypes.breakpoint(bpId, placed, line))
         }
         return JsonObject().apply { add("breakpoints", resultBps) }
@@ -512,124 +516,6 @@ class DapServer(
         return true to "placed in ${rt.name()}"
     }
 
-    /**
-     * Custom DAP request used by the extension to push down the full set of
-     * source breakpoints after attach. VSCode's built-in `setBreakpoints` only
-     * fires for files that are open in the editor at session start, so we
-     * additionally iterate `vscode.debug.breakpoints` on the extension side
-     * and replay them through this request to ensure all BPs are installed,
-     * including those in non-open files.
-     *
-     * Args: { files: [ { source: { path: String }, breakpoints: [ { line, condition?, logMessage? } ] } ] }
-     */
-    private fun handleSyncBreakpoints(args: JsonObject): JsonObject {
-        val files = args.get("files")?.asJsonArray ?: JsonArray()
-        Logging.info("syncBreakpoints 共 ${files.size()} 个文件")
-        var total = 0
-        var placedTotal = 0
-        for (fileEl in files) {
-            val fileObj = fileEl.asJsonObject
-            val src = fileObj.get("source")?.asJsonObject ?: continue
-            val filePath = src.get("path")?.asString ?: continue
-            val bps = fileObj.get("breakpoints")?.asJsonArray ?: continue
-
-            // Lines the extension is currently aware of for this file.
-            // We do NOT pre-filter here — every BP is acted on according to
-            // its `enabled` flag, because that's how we distinguish the
-            // three states (ACTIVE / DISABLED / REMOVED) without relying on
-            // the destructive diff in handleSetBreakpoints.
-            val requestedLines = HashSet<Int>()
-            for (bpEl in bps) {
-                val bp = bpEl.asJsonObject
-                val line = bp.get("line")?.asInt ?: continue
-                val condition = bp.get("condition")?.takeUnless { it.isJsonNull }?.asString
-                val logMessage = bp.get("logMessage")?.takeUnless { it.isJsonNull }?.asString
-                // `enabled` defaults to true when the field is absent so
-                // existing senders stay backwards-compatible.
-                val enabled = bp.get("enabled")?.takeUnless { it.isJsonNull }?.asBoolean ?: true
-                requestedLines.add(line)
-                total++
-
-                // Reuse id from the earlier setBreakpoints response (or a
-                // prior sync that placed it). Allocate only for first-time
-                // adds — DISABLED→ACTIVE reuses the same id, which keeps
-                // VSCode's BP correlation stable across toggles.
-                val bpId = bpIdRegistry
-                    .getOrPut(filePath) { mutableMapOf() }
-                    .getOrPut(line) { bpIdSeq.getAndIncrement() }
-
-                if (!enabled) {
-                    // DISABLED state: keep id, drop JDI. JDI has no notion
-                    // of "disabled" and would fire regardless, so the BP
-                    // must be torn out of the VM. The id stays so re-enable
-                    // reuses it — VSCode sees the same id for the same
-                    // editor BP across toggle cycles.
-                    bpManager?.removeBreakpoint(filePath, line)
-                    Logging.info(
-                        "syncBreakpoints: BP 已禁用, 移除 JDI 但保留 id: " +
-                            "file=$filePath line=$line id=$bpId"
-                    )
-                    sendEvent(
-                        "breakpoint",
-                        DtoTypes.breakpointEvent(bpId, false, line, filePath, "已禁用")
-                    )
-                    continue
-                }
-
-                // ACTIVE state: ensure JDI is installed. setBreakpointWithId
-                // is idempotent — re-issuing for a line that already has a
-                // live request short-circuits without touching the VM.
-                val fqns = indexer.sourceIndex().resolveFqnsByFile(filePath)
-                val (placed, _) = tryPlaceBp(filePath, line, condition, logMessage)
-                if (!placed) {
-                    pendingJdiBps.add(PendingBp(bpId, filePath, line, condition, logMessage))
-                }
-
-                val message = when {
-                    placed -> null
-                    fqns.isEmpty() -> "源文件未索引"
-                    else -> "类尚未被 JVM 加载: ${fqns.joinToString()}"
-                }
-                sendEvent("breakpoint", DtoTypes.breakpointEvent(bpId, placed, line, filePath, message))
-                if (placed) placedTotal++
-            }
-
-            // REMOVED state: lines that exist in bpIdRegistry but were NOT
-            // included in the payload. The extension's pushBreakpointsForFiles
-            // iterates vscode.debug.breakpoints — anything not there was
-            // truly deleted by the user (e.removed), so the adapter-side id
-            // AND the JDI request must both go away. Re-add at the same
-            // line later will allocate a fresh id (matches VSCode's BP
-            // lifecycle: each add gets its own vsId, and we mirror that
-            // here so the same id never points at two different BPs).
-            val existingLines = bpIdRegistry[filePath]?.keys?.toList() ?: emptyList()
-            for (line in existingLines) {
-                if (line !in requestedLines) {
-                    val removedId = bpManager?.removeBreakpoint(filePath, line)
-                    if (removedId != null) {
-                        pendingJdiBps.removeAll { it.id == removedId }
-                        bpIdRegistry[filePath]?.remove(line)
-                        if (bpIdRegistry[filePath]?.isEmpty() == true) {
-                            bpIdRegistry.remove(filePath)
-                        }
-                        Logging.info(
-                            "syncBreakpoints: 移除已删除的 BP: file=$filePath line=$line id=$removedId"
-                        )
-                        sendEvent(
-                            "breakpoint",
-                            DtoTypes.breakpointEvent(removedId, false, line, filePath, "已删除")
-                        )
-                    }
-                }
-            }
-        }
-        Logging.info("syncBreakpoints 完成: requested=$total placed=$placedTotal")
-        return JsonObject().apply {
-            addProperty("requested", total)
-            addProperty("placed", placedTotal)
-        }
-    }
-
     private fun handleThreads(): JsonObject {
         val result = JsonArray()
         jdi?.getVm()?.allThreads()?.forEach { result.add(DtoTypes.thread(it.uniqueID(), it.name())) }
@@ -646,9 +532,8 @@ class DapServer(
             val fqn = loc.declaringType().name()
             val line = loc.lineNumber()
             val entry = indexer.sourceIndex().resolveByFqn(fqn)
-            val sourcePath = entry?.path
-            val sourceName = sourcePath?.substringAfterLast(java.io.File.separatorChar)?.takeIf { it.isNotEmpty() }
-                ?: sourcePath
+            val sourcePath = entry?.displayPath
+            val sourceName = sourcePath?.let { sourceBasename(it).takeIf { n -> n.isNotEmpty() } ?: it }
             val frameName = "${loc.declaringType().name()}.${loc.method().name()}"
             val frameId = nextFrameId++
             frameIdToIndex[frameId] = idx
@@ -658,7 +543,7 @@ class DapServer(
             frames.add(sf)
             if (idx == 0) {
                 Logging.info(
-                    "stackTrace[0] fqn=$fqn line=$line sourcePath=$sourcePath sourceName=$sourceName"
+                    "[Server] stackTrace[0] fqn=$fqn line=$line sourcePath=$sourcePath sourceName=$sourceName"
                 )
             }
             idx++
@@ -761,7 +646,7 @@ class DapServer(
                     ?: all.firstOrNull()
             }
         if (thread == null) {
-            Logging.warn("pause: VM 中没有可用线程, 跳过 stopped event")
+            Logging.warn("[Server] pause: VM 中没有可用线程, 跳过 stopped event")
             return JsonObject()
         }
         val stopped = DtoTypes.stopped("pause", thread.uniqueID().toInt())
@@ -774,24 +659,23 @@ class DapServer(
                 val entry = indexer.sourceIndex().resolveByFqn(fqn)
                 val effectiveLine = if (loc.lineNumber() >= 1) loc.lineNumber() else 1
                 if (entry != null) {
-                    val sourcePath = entry.path
-                    val sourceName = sourcePath.substringAfterLast(java.io.File.separatorChar)
-                        .takeIf { it.isNotEmpty() } ?: sourcePath
+                    val sourcePath = entry.displayPath
+                    val sourceName = sourceBasename(sourcePath).takeIf { it.isNotEmpty() } ?: sourcePath
                     stopped.add("source", DtoTypes.source(sourcePath, sourceName))
                     stopped.addProperty("line", effectiveLine)
                     stopped.addProperty("column", 1)
                 } else {
-                    Logging.warn("pause: 未找到 FQN 对应的源: $fqn")
+                    Logging.warn("[Server] pause: 未找到 FQN 对应的源: $fqn")
                     stopped.addProperty("line", effectiveLine)
                     stopped.addProperty("column", 1)
                 }
             }
         } catch (e: Exception) {
             // VM-resume races with frame-walk happen sometimes; ignore.
-            Logging.warn("pause: 获取栈帧失败: ${e.message}")
+            Logging.warn("[Server] pause: 获取栈帧失败: ${e.message}")
         }
         sendEvent("stopped", stopped)
-        Logging.info("pause: 已暂停 thread=${thread.name()}, 发送 stopped event")
+        Logging.info("[Server] pause: 已暂停 thread=${thread.name()}, 发送 stopped event")
         return JsonObject()
     }
 
@@ -803,7 +687,7 @@ class DapServer(
         // get the cheat sheet even when no frame is in context (e.g. they
         // typed `?` in a console that isn't attached to a paused thread).
         if (trimmed.lowercase() in HELP_TRIGGERS) {
-            Logging.info("evaluate: 返回表达式语法手册")
+            Logging.info("[Server] evaluate: 返回表达式语法手册")
             return JsonObject().apply {
                 addProperty("result", HelpText.EVALUATE_LANGUAGE_REFERENCE)
                 addProperty("variablesReference", 0)
@@ -877,7 +761,7 @@ class DapServer(
                         "若需修改请检查源码声明. 原始错误: ${e.message}"
                 )
             }
-            Logging.info("setVariable: 帧级变量 $name = $valueExpr")
+            Logging.info("[Server] setVariable: 帧级变量 $name = $valueExpr")
             val newRef = if (newValue != null && isExpandable(newValue)) varFormatter.registerExpandable(newValue) else 0
             return JsonObject().apply {
                 addProperty("value", formatValueForResponse(newValue))
@@ -912,7 +796,7 @@ class DapServer(
                         "若需调试请修改源码去掉 final 后重新部署."
                 )
             }
-            Logging.info("setVariable: 字段 ${type.name()}.$name = $valueExpr")
+            Logging.info("[Server] setVariable: 字段 ${type.name()}.$name = $valueExpr")
             val newRef = if (newValue != null && isExpandable(newValue)) varFormatter.registerExpandable(newValue) else 0
             return JsonObject().apply {
                 addProperty("value", formatValueForResponse(newValue))
@@ -975,7 +859,7 @@ class DapServer(
             findAnySuspendedFrame() ?: throw Exception("没有可用的栈帧")
         }
         val newValue = exprEvaluator.resolveExpression(value, frame)
-        Logging.info("setExpression: $expression = $newValue")
+        Logging.info("[Server] setExpression: $expression = $newValue")
         // Run the assignment through evaluate so we get the formatted text
         // back and reuse the existing assignment code path.
         val display = exprEvaluator.evaluateExpression("$expression = $value", frame)
@@ -997,11 +881,12 @@ class DapServer(
         for (entry in indexer.sourceIndex().entries()) {
             if (entry.path in seenPaths) continue
             seenPaths.add(entry.path)
-            val sourceName = entry.path.substringAfterLast(java.io.File.separatorChar)
-                .takeIf { it.isNotEmpty() } ?: entry.path
-            sources.add(DtoTypes.source(entry.path, sourceName))
+            val shownPath = entry.displayPath
+            val sourceName = sourceBasename(shownPath)
+                .takeIf { it.isNotEmpty() } ?: shownPath
+            sources.add(DtoTypes.source(shownPath, sourceName))
         }
-        Logging.info("loadedSources: 返回 ${sources.size()} 个源文件")
+        Logging.info("[Server] loadedSources: 返回 ${sources.size()} 个源文件")
         return JsonObject().apply { add("sources", sources) }
     }
 
@@ -1011,7 +896,7 @@ class DapServer(
                 val bp = event.jdiEvent as? com.sun.jdi.event.BreakpointEvent
                 val loc = bp?.location()
                 Logging.info(
-                    "JDI event: breakpoint line=${loc?.lineNumber()} fqn=${loc?.declaringType()?.name()}"
+                    "[Server] JDI event: breakpoint line=${loc?.lineNumber()} fqn=${loc?.declaringType()?.name()}"
                 )
                 val set = event.jdiSet ?: return@withJdiLock
                 handleBreakpoint(bp ?: return@withJdiLock, set)
@@ -1020,7 +905,7 @@ class DapServer(
                 val s = event.jdiEvent as? com.sun.jdi.event.StepEvent
                 val loc = s?.location()
                 Logging.info(
-                    "JDI event: step line=${loc?.lineNumber()} fqn=${loc?.declaringType()?.name()}"
+                    "[Server] JDI event: step line=${loc?.lineNumber()} fqn=${loc?.declaringType()?.name()}"
                 )
                 val set = event.jdiSet ?: return@withJdiLock
                 handleStep(s ?: return@withJdiLock, set)
@@ -1039,12 +924,12 @@ class DapServer(
                 // any of our pending BPs. Logging at INFO level would also
                 // spam thousands of lines at startup. Both issues were the
                 // root cause of the "slow after class-prepare" symptom.
-                Logging.debug("JDI event: class-prepare $className")
+                Logging.debug("[Server] JDI event: class-prepare $className")
                 if (pendingJdiBps.isEmpty()) return@withJdiLock
                 tryDrainForClass(className, loadedType)
             }
             else -> {
-                Logging.info("JDI event: ${event.kind}")
+                Logging.info("[Server] JDI event: ${event.kind}")
                 when (event.kind) {
                     "terminated" -> sendEvent("terminated", JsonObject())
                     "exited" -> sendEvent("exited", JsonObject())
@@ -1064,7 +949,7 @@ class DapServer(
         // Push a `breakpoint` event with verified=true as soon as the BP
         // fires. This is the standard DAP hook for transitioning a BP from
         // "unverified" to "verified": even if our initial setBreakpoints
-        // response or earlier syncBreakpoints event was missed/lost, the hit
+        // response or earlier custom/syncBreakpoints event was missed/lost, the hit
         // itself proves the BP is valid, and this event lets VSCode mark it
         // as verified.
         if (bpId != 0) {
@@ -1073,12 +958,12 @@ class DapServer(
                 meta != null -> meta.line
                 else -> 1
             }
-            val hitSourcePath = entry?.path ?: meta?.filePath
+            val hitSourcePath = entry?.displayPath ?: meta?.filePath?.let { displayPathFor(it) }
             sendEvent(
                 "breakpoint",
                 DtoTypes.breakpointEvent(bpId, true, effectiveLine, hitSourcePath, null)
             )
-            Logging.info("BP id=$bpId 命中, 已推送 verified=true event")
+            Logging.info("[Server] BP id=$bpId 命中, 已推送 verified=true event")
         } else {
             // BP fired but we can't find it in the manager. Could be:
             //   - race with a clearBreakpointsForFile during source-dir change
@@ -1088,7 +973,7 @@ class DapServer(
             // VSCode into thinking the user is paused) — just release the
             // suspended thread and move on.
             Logging.warn(
-                "BP 命中但找不到 adapter id (line=${loc.lineNumber()} fqn=$fqn), 释放线程"
+                "[Server] BP 命中但找不到 adapter id (line=${loc.lineNumber()} fqn=$fqn), 释放线程"
             )
             set.resume()
             return
@@ -1109,7 +994,7 @@ class DapServer(
             val frame = thread.frame(0)
             val result = exprEvaluator.evaluateExpression(meta.condition!!, frame)
             if (!isTruthy(result)) {
-                Logging.debug("条件不满足, 跳过停止: ${meta.condition}")
+                Logging.debug("[Server] 条件不满足, 跳过停止: ${meta.condition}")
                 // Critical fix: use set.resume() (not thread.resume()) so the
                 // EventSet is fully released. Otherwise the next
                 // queue.remove() may either block or re-deliver the same
@@ -1123,7 +1008,7 @@ class DapServer(
         val stopped = DtoTypes.stopped("breakpoint", thread.uniqueID().toInt())
         if (entry != null) {
             val sourcePath = entry.path
-            val sourceName = sourcePath.substringAfterLast(java.io.File.separatorChar).takeIf { it.isNotEmpty() } ?: sourcePath
+            val sourceName = sourceBasename(sourcePath).takeIf { it.isNotEmpty() } ?: sourcePath
             val effectiveLine = when {
                 loc.lineNumber() >= 1 -> loc.lineNumber()
                 meta != null -> meta.line
@@ -1133,13 +1018,145 @@ class DapServer(
             stopped.addProperty("line", effectiveLine)
             stopped.addProperty("column", 1)
         } else {
-            Logging.warn("未找到 FQN 对应的源: $fqn")
+            Logging.warn("[Server] 未找到 FQN 对应的源: $fqn")
             val effectiveLine = if (loc.lineNumber() >= 1) loc.lineNumber() else (meta?.line ?: 1)
             stopped.addProperty("line", effectiveLine)
             stopped.addProperty("column", 1)
         }
         sendEvent("stopped", stopped)
         // Set stays suspended; the user will issue continue / next / etc.
+    }
+
+    /**
+     * Custom DAP request used by the extension to push down the full set of
+     * source breakpoints after attach. VSCode's built-in `setBreakpoints` only
+     * fires for files that are open in the editor at session start, so we
+     * additionally iterate `vscode.debug.breakpoints` on the extension side
+     * and replay them through this request to ensure all BPs are installed,
+     * including those in non-open files.
+     *
+     * Args: { files: [ { source: { path: String }, breakpoints: [ { line, condition?, logMessage? } ] } ] }
+     */
+    /** Path to echo back to VSCode for a canonical file key. */
+    private fun displayPathFor(filePath: String): String =
+        displayPathByFile[filePath] ?: filePath
+
+    private fun handleSyncBreakpoints(args: JsonObject): JsonObject {
+        val files = args.get("files")?.asJsonArray ?: JsonArray()
+        Logging.info("[Server] custom/syncBreakpoints 共 ${files.size()} 个文件")
+        var total = 0
+        var placedTotal = 0
+        for (fileEl in files) {
+            val fileObj = fileEl.asJsonObject
+            val src = fileObj.get("source")?.asJsonObject ?: continue
+            val rawPath = src.get("path")?.asString ?: continue
+            val filePath = normalizeSourcePath(rawPath)
+            if (filePath.isNotEmpty()) {
+                displayPathByFile[filePath] = rawPath
+            }
+            val bps = fileObj.get("breakpoints")?.asJsonArray ?: continue
+
+            // Lines the extension is currently aware of for this file.
+            // We do NOT pre-filter here — every BP is acted on according to
+            // its `enabled` flag, because that's how we distinguish the
+            // three states (ACTIVE / DISABLED / REMOVED) without relying on
+            // the destructive diff in handleSetBreakpoints.
+            val requestedLines = HashSet<Int>()
+            for (bpEl in bps) {
+                val bp = bpEl.asJsonObject
+                val line = bp.get("line")?.asInt ?: continue
+                val condition = bp.get("condition")?.takeUnless { it.isJsonNull }?.asString
+                val logMessage = bp.get("logMessage")?.takeUnless { it.isJsonNull }?.asString
+                // `enabled` defaults to true when the field is absent so
+                // existing senders stay backwards-compatible.
+                val enabled = bp.get("enabled")?.takeUnless { it.isJsonNull }?.asBoolean ?: true
+                requestedLines.add(line)
+                total++
+
+                // Reuse id from the earlier setBreakpoints response (or a
+                // prior sync that placed it). Allocate only for first-time
+                // adds — DISABLED→ACTIVE reuses the same id, which keeps
+                // VSCode's BP correlation stable across toggles.
+                val bpId = bpIdRegistry
+                    .getOrPut(filePath) { mutableMapOf() }
+                    .getOrPut(line) { bpIdSeq.getAndIncrement() }
+
+                if (!enabled) {
+                    // DISABLED state: keep id, drop JDI. JDI has no notion
+                    // of "disabled" and would fire regardless, so the BP
+                    // must be torn out of the VM. The id stays so re-enable
+                    // reuses it — VSCode sees the same id for the same
+                    // editor BP across toggle cycles.
+                    bpManager?.removeBreakpoint(filePath, line)
+                    Logging.info(
+                        "[Server] custom/syncBreakpoints: BP 已禁用, 移除 JDI 但保留 id: " +
+                            "file=$filePath line=$line id=$bpId"
+                    )
+                    sendEvent(
+                        "breakpoint",
+                        DtoTypes.breakpointEvent(bpId, false, line, displayPathFor(filePath), "已禁用")
+                    )
+                    continue
+                }
+
+                // ACTIVE state: ensure JDI is installed. setBreakpointWithId
+                // is idempotent — re-issuing for a line that already has a
+                // live request short-circuits without touching the VM.
+                val fqns = indexer.sourceIndex().resolveFqnsByFile(filePath)
+                val (placed, reason) = tryPlaceBp(filePath, line, condition, logMessage)
+                if (!placed) {
+                    pendingJdiBps.add(PendingBp(bpId, filePath, line, condition, logMessage))
+                }
+                // The raw tryPlaceBp reason is the actionable signal here —
+                // the event message below is only a coarse user-facing hint.
+                Logging.info(
+                    "[Server] custom/syncBreakpoints: file=$filePath line=$line id=$bpId " +
+                        "placed=$placed reason=$reason"
+                )
+
+                val message = when {
+                    placed -> null
+                    fqns.isEmpty() -> "源文件未索引"
+                    else -> "类尚未被 JVM 加载或该行不可放置: ${fqns.joinToString()}"
+                }
+                sendEvent("breakpoint", DtoTypes.breakpointEvent(bpId, placed, line, displayPathFor(filePath), message))
+                if (placed) placedTotal++
+            }
+
+            // REMOVED state: lines that exist in bpIdRegistry but were NOT
+            // included in the payload. The extension's pushBreakpointsForFiles
+            // iterates vscode.debug.breakpoints — anything not there was
+            // truly deleted by the user (e.removed), so the adapter-side id
+            // AND the JDI request must both go away. Re-add at the same
+            // line later will allocate a fresh id (matches VSCode's BP
+            // lifecycle: each add gets its own vsId, and we mirror that
+            // here so the same id never points at two different BPs).
+            val existingLines = bpIdRegistry[filePath]?.keys?.toList() ?: emptyList()
+            for (line in existingLines) {
+                if (line !in requestedLines) {
+                    val removedId = bpManager?.removeBreakpoint(filePath, line)
+                    if (removedId != null) {
+                        pendingJdiBps.removeAll { it.id == removedId }
+                        bpIdRegistry[filePath]?.remove(line)
+                        if (bpIdRegistry[filePath]?.isEmpty() == true) {
+                            bpIdRegistry.remove(filePath)
+                        }
+                        Logging.info(
+                            "[Server] custom/syncBreakpoints: 移除已删除的 BP: file=$filePath line=$line id=$removedId"
+                        )
+                        sendEvent(
+                            "breakpoint",
+                            DtoTypes.breakpointEvent(removedId, false, line, displayPathFor(filePath), "已删除")
+                        )
+                    }
+                }
+            }
+        }
+        Logging.info("[Server] custom/syncBreakpoints 完成: requested=$total placed=$placedTotal")
+        return JsonObject().apply {
+            addProperty("requested", total)
+            addProperty("placed", placedTotal)
+        }
     }
 
     private fun handleStep(stepEvent: com.sun.jdi.event.StepEvent, @Suppress("UNUSED_PARAMETER") set: com.sun.jdi.event.EventSet) {
@@ -1169,7 +1186,7 @@ class DapServer(
                 val frames = t.frames()
                 if (idx in frames.indices) return frames[idx]
             } catch (e: Exception) {
-                Logging.warn("获取线程栈失败: ${t.name()} - ${e.message}")
+                Logging.warn("[Server] 获取线程栈失败: ${t.name()} - ${e.message}")
             }
         }
         return null
@@ -1204,9 +1221,9 @@ class DapServer(
         // Always log breakpoint events so we can see what id / verified
         // status we are pushing to VSCode. Other events stay at debug level.
         if (event == "breakpoint") {
-            Logging.info("SEND breakpoint event: $evt")
+            Logging.info("[Server] SEND breakpoint event: $evt")
         } else {
-            Logging.debug("SEND event[$event]: $evt")
+            Logging.debug("[Server] SEND event[$event]: $evt")
         }
     }
 

@@ -1,28 +1,32 @@
 // extension/src/extension.ts
-// VSCode dual-extension dispatcher.
+// VSCode extension entry point.
 //
-// `extensionKind: ["ui", "workspace"]` makes VSCode load this extension on
-// both the UI host and the workspace host. Each host runs a different
-// code path:
-//   - UI side       (kind=ui):       UI + adb + Java Adapter + remote buildIndex call
-//   - Workspace side (kind=workspace): only exposes buildIndex() API
+// `extensionKind: ["ui", "workspace"]` declares a preference, but VSCode
+// loads the extension on exactly ONE host: the UI host (in both local and
+// Remote-SSH windows — the effective kind is always `ui` here). All
+// filesystem work therefore goes through `vscode.workspace.fs` /
+// `vscode.workspace.findFiles`, which transparently reach the remote FS.
 //
-// Dispatch on `context.extension.extensionKind` (the host-effective kind)
-// rather than `vscode.env.remoteName` — the latter is non-empty on the UI
-// side too in a Remote-SSH window and would route the local side wrong.
-//
-// All sides share a single "Android Debugger" OutputChannel; logs are
-// tagged with the side they came from so the two can be distinguished
-// in the same channel.
+// activateUI is deliberately thin: it constructs the managers, subscribes
+// the cross-manager pipelines that aren't owned by a manager itself, and
+// hands everything else to UIManager / SessionManager. All sides share a
+// single "Android Debugger" OutputChannel.
 import * as vscode from 'vscode';
 import { Logger } from './util/logger';
+import { getConfig } from './util/config';
+import { ensureJdkOrWarn } from './util/jdk';
+import { DefaultAdbRunner } from './adb/AdbRunner';
+import { SourceDirManager } from './core/SourceDirManager';
+import { IndexManager } from './core/IndexManager';
+import { createIndexer } from './core/indexer/IndexerFactory';
+import { BreakpointManager } from './core/BreakpointManager';
+import { SessionManager } from './core/SessionManager';
+import { UIManager } from './ui/UIManager';
+import { SourceDirsBridge, SessionBridge } from './ui/UiBridges';
 import { t } from './i18n/strings';
 
 export async function activate(context: vscode.ExtensionContext): Promise<unknown> {
-  const kind = context.extension.extensionKind;
-  const isUI = kind === vscode.ExtensionKind.UI;
-  const tag = isUI ? 'DISPATCHER UI' : 'DISPATCHER Workspace';
-  const sideTag = isUI ? 'UI' : 'Workspace';
+  const tag = 'DISPATCHER';
 
   const outputChannel = vscode.window.createOutputChannel(t.outputChannel());
   Logger.initialize(outputChannel);
@@ -30,7 +34,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<unknow
 
   Logger.info(`=========================================`);
   Logger.info(`[${tag}] activate() entered`);
-  Logger.info(`[${tag}]   side (kind)        = ${sideTag} (UI=1, Workspace=2, raw=${kind})`);
   Logger.info(`[${tag}]   declared in pkg.json = ${JSON.stringify(
     (context.extension.packageJSON as { extensionKind?: unknown }).extensionKind
   )}`);
@@ -44,35 +47,133 @@ export async function activate(context: vscode.ExtensionContext): Promise<unknow
   Logger.info(`=========================================`);
 
   console.log(
-    `[ADB Dispatcher] side=${sideTag} kind=${kind} ` +
-      `sessionId=${vscode.env.sessionId} remoteName="${vscode.env.remoteName || '<none>'}"`
+    `[ADB Dispatcher] sessionId=${vscode.env.sessionId} ` +
+      `remoteName="${vscode.env.remoteName || '<none>'}"`
   );
 
-  if (isUI) {
-    Logger.info(`[${tag}] -> routing to UI side (extension.local.ts)`);
-    try {
-      const { activate: activateUI } = await import('./extension.local');
-      await activateUI(context);
-      Logger.info(`[${tag}] UI side activated OK`);
-      return undefined;
-    } catch (e) {
-      const err = e as Error;
-      Logger.error(`[${tag}] ERROR activating UI side`, err);
-      throw e;
-    }
-  }
-
-  Logger.info(`[${tag}] -> routing to Workspace side (extension.remote.ts)`);
   try {
-    const { activate: activateWorkspace } = await import('./extension.remote');
-    const api = activateWorkspace(context);
-    Logger.info(`[${tag}] Workspace side activated OK`);
-    return api;
+    await activateUI(context);
+    Logger.info(`[${tag}] UI side activated OK`);
+    return undefined;
   } catch (e) {
-    const err = e as Error;
-    Logger.error(`[${tag}] ERROR activating Workspace side`, err);
+    Logger.error(`[${tag}] ERROR activating UI side`, e as Error);
     throw e;
   }
+}
+
+/**
+ * UI-side activation: construct the managers, wire the pipelines, hand
+ * the workbench surfaces to UIManager. JDK pre-flight warns but does not
+ * fail — SessionManager re-detects lazily at attach time.
+ */
+async function activateUI(context: vscode.ExtensionContext): Promise<void> {
+  const config = getConfig();
+  const jdk = await ensureJdkOrWarn(config.javaPath);
+
+  const dirsManager = new SourceDirManager(context.workspaceState);
+  const breakpointManager = new BreakpointManager(
+    context,
+    // Bridge callback: BreakpointManager never holds a SourceDirManager.
+    // Auto-include gate: skip files already covered by a marked dir.
+    (file) => dirsManager.isPathMarked(file)
+  );
+
+  // Indexer strategy is chosen once here and injected into IndexManager.
+  // Today: always LocalIndexer (workspace.fs/findFiles reach the remote FS
+  // transparently). In remote windows the factory probes for a remote
+  // indexer provider and reports fallback — the seam for the future
+  // workspace-host helper extension (see core/indexer/IndexerFactory.ts).
+  let ui: UIManager | undefined;
+  const indexer = createIndexer({
+    extensionId: context.extension.id,
+    onFallback: () => ui?.statusBar.setIndexerMode('fallback'),
+  });
+  const indexManager = new IndexManager(indexer);
+
+  const sessionManager = new SessionManager({
+    javaPath: jdk?.javaPath,
+    adbRunner: new DefaultAdbRunner(config.adbPath),
+    // Bridges — managers never depend on each other; all cross-manager
+    // traffic flows through these callbacks wired here.
+    getFqnInfo: () => indexManager.getAllEntries(),
+  });
+
+  // Bridge contracts handed to the UI layer — UIManager never sees a
+  // manager instance, only these callback objects.
+  const dirsBridge: SourceDirsBridge = {
+    getDirs: () => dirsManager.getAllDirs(),
+    contains: (d) => dirsManager.contains(d),
+    findCoveringAncestor: (d) => dirsManager.findCoveringAncestor(d),
+    addDir: (d) => dirsManager.addDir(d),
+    removeDir: (d) => dirsManager.removeDir(d),
+    isPathMarked: (f) => dirsManager.isPathMarked(f),
+    onDidChange: (cb) => dirsManager.onDidChange(cb),
+  };
+  const sessionBridge: SessionBridge = {
+    attachToProcess: (d, p) => sessionManager.attachToProcess(d, p),
+    restartActiveSession: () => sessionManager.restartActiveSession(),
+  };
+
+  // === External bridge wiring (the ONLY place managers meet) ===
+  context.subscriptions.push(
+    // marked dirs changed → full index rebuild
+    dirsManager.onDidChange(async () => {
+      await indexManager.rebuildFromDirs(
+        await dirsManager.getAllDirs(),
+        config.indexMaxFiles
+      );
+    }),
+    // breakpoint landed outside marked dirs → auto-include into index
+    breakpointManager.onNewFileNeedsIndex((uris) => void indexManager.autoIncludeFiles(uris)),
+    // index rebuilt → broadcast to live sessions
+    indexManager.onIndexReady((entries) => sessionManager.broadcastIndex(entries)),
+    // breakpoints changed → broadcast to live sessions
+    breakpointManager.onBreakpointsChanged((files) => sessionManager.broadcastBreakpoints(files))
+  );
+
+  // Fresh session start → refresh the index from the currently marked dirs,
+  // then push the initial index + breakpoint snapshots. The rebuild here is
+  // what keeps entries warm: nothing else fires between activation and the
+  // first attach (dirsManager.onDidChange only fires on mark/unmark), and
+  // the pre-refactor flow built the index on every attach as well. Data
+  // access happens in this closure, not inside SessionManager.
+  sessionManager.setSessionInitializer(async (ctx) => {
+    await indexManager.rebuildFromDirs(
+      await dirsManager.getAllDirs(),
+      config.indexMaxFiles
+    );
+
+    const entries = indexManager.getAllEntries();
+    Logger.info(`[session] initial index push: ${entries.length} entries`);
+    if (entries.length > 0) {
+      await ctx.dap.syncSourceIndex(entries).catch((err: Error) => {
+        Logger.warn(`[session] initial custom/syncSourceIndex failed: ${err.message}`);
+      });
+    }
+    await ctx.dap
+      .syncBreakpoints(breakpointManager.getCurrentBreakpoints())
+      .catch((err: Error) => {
+        Logger.warn(`[session] initial custom/syncBreakpoints failed: ${err.message}`);
+      });
+  });
+
+  const uiManager = new UIManager({ dirs: dirsBridge, session: sessionBridge });
+  ui = uiManager;
+  context.subscriptions.push(uiManager, indexManager);
+
+  // In a Remote-SSH window the whole extension runs on the UI host; source
+  // indexing still works (workspace.fs proxies the remote FS) but is not
+  // native-speed, so surface the degraded mode on the status bar.
+  if (vscode.env.remoteName) {
+    uiManager.statusBar.setIndexerMode('fallback');
+    Logger.warn(
+      `[DISPATCHER] remote window (${vscode.env.remoteName}): extension runs on the UI host; ` +
+        `source indexing goes through the remote FS proxy (works, slower)`
+    );
+  }
+
+  sessionManager.register(context, context.extensionPath);
+  uiManager.registerCommands();
 }
 
 export function deactivate(): void {

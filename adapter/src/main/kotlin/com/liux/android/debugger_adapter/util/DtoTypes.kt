@@ -58,7 +58,7 @@ object DtoTypes {
 
     /**
      * Body of a DAP `breakpoint` event. Used by handlers that set breakpoints
-     * outside of the standard `setBreakpoints` request (e.g. `syncBreakpoints`)
+     * outside of the standard `setBreakpoints` request (e.g. `custom/syncBreakpoints`)
      * to push verification status back to VSCode so it can render the BP as
      * verified (filled circle) instead of unverified (hollow circle).
      *
@@ -74,7 +74,7 @@ object DtoTypes {
             addProperty("line", line)
             if (sourcePath != null) {
                 add("source", JsonObject().apply {
-                    val baseName = sourcePath.substringAfterLast(java.io.File.separatorChar)
+                    val baseName = sourceBasename(sourcePath)
                         .takeIf { it.isNotEmpty() } ?: sourcePath
                     addProperty("name", baseName)
                     addProperty("path", sourcePath)

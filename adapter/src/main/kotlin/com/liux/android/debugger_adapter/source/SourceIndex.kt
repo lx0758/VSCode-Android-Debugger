@@ -1,11 +1,23 @@
 package com.liux.android.debugger_adapter.source
 
 data class FileEntry(
+    // Canonical lookup key — posix path for remote workspaces, Windows
+    // path for local ones. Matches the adapter's normalized BP keys.
     val path: String,
     val packageName: String,
-    val fqns: List<String>
+    val fqns: List<String>,
+    /**
+     * The path form VSCode resolves when echoed back as DAP `source.path`:
+     * full `vscode-remote://...` URI for remote workspaces, null for local
+     * ones (then `path` is already a native local path). A bare posix path
+     * echoed to a Windows client renders as `\home\...` and never opens.
+     */
+    val uri: String? = null,
 ) {
     val primaryFqn: String = fqns.first()
+
+    /** Best path to hand back to VSCode. */
+    val displayPath: String get() = uri ?: path
 }
 
 class SourceIndex {

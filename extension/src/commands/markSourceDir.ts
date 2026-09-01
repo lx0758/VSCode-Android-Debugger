@@ -1,57 +1,57 @@
+// extension/src/commands/markSourceDir.ts
 import * as vscode from 'vscode';
-import { SourceDirsManager } from '../source/dirs';
+import { SourceDirsBridge } from '../ui/UiBridges';
 import { t } from '../i18n/strings';
+import { displayPath, parseDirEntry } from '../util/uri';
 
 export async function runMarkSourceDir(
-  dirsManager: SourceDirsManager,
+  dirs: SourceDirsBridge,
   contextUri?: vscode.Uri
 ): Promise<void> {
   const targetUri = await pickTargetUri(contextUri);
-  if (!targetUri || !targetUri.fsPath) return;
+  if (!targetUri) return;
+  const target = displayPath(targetUri);
 
-  if (dirsManager.contains(targetUri.fsPath)) {
-    vscode.window.showInformationMessage(t.alreadyDir(targetUri.fsPath));
+  if (dirs.contains(targetUri)) {
+    vscode.window.showInformationMessage(t.alreadyDir(target));
     return;
   }
 
-  const covering = dirsManager.findCoveringAncestor(targetUri.fsPath);
+  const covering = dirs.findCoveringAncestor(targetUri);
   if (covering) {
     vscode.window.showInformationMessage(
-      t.dirCoveredByAncestor(targetUri.fsPath, covering)
+      t.dirCoveredByAncestor(target, displayPath(parseDirEntry(covering)))
     );
     return;
   }
 
-  // folder is no longer needed — paths are stored as absolute strings
-  await dirsManager.addDir(undefined, targetUri.fsPath);
-  vscode.window.showInformationMessage(t.dirAdded(targetUri.fsPath), t.markUndo()).then(async (choice) => {
+  await dirs.addDir(targetUri);
+  vscode.window.showInformationMessage(t.dirAdded(target), t.markUndo()).then(async (choice) => {
     if (choice === t.markUndo()) {
-      await dirsManager.removeDir(undefined, targetUri.fsPath);
+      await dirs.removeDir(targetUri);
     }
   });
 }
 
 export async function runUnmarkSourceDir(
-  dirsManager: SourceDirsManager,
+  dirs: SourceDirsBridge,
   contextUri?: vscode.Uri
 ): Promise<void> {
   const targetUri = await pickTargetUri(contextUri);
-  if (!targetUri || !targetUri.fsPath) return;
+  if (!targetUri) return;
+  const target = displayPath(targetUri);
 
-  if (!dirsManager.contains(targetUri.fsPath)) {
-    vscode.window.showInformationMessage(t.notADir(targetUri.fsPath));
-    return;
-  }
-
-  await dirsManager.removeDir(undefined, targetUri.fsPath);
-  vscode.window.showInformationMessage(t.dirRemoved(targetUri.fsPath));
+  // No contains() precondition: removeDir matches stale/legacy entries too,
+  // so a wrongly-stored path can always be unmarked.
+  const removed = await dirs.removeDir(targetUri);
+  vscode.window.showInformationMessage(removed ? t.dirRemoved(target) : t.notADir(target));
 }
 
 async function pickTargetUri(contextUri?: vscode.Uri): Promise<vscode.Uri | undefined> {
-  if (contextUri && contextUri.fsPath) return contextUri;
+  if (contextUri) return contextUri;
 
   const active = vscode.window.activeTextEditor?.document.uri;
-  if (active && active.fsPath) {
+  if (active) {
     return vscode.Uri.joinPath(active, '..');
   }
 

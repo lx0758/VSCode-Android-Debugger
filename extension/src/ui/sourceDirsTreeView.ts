@@ -1,13 +1,17 @@
 import * as vscode from 'vscode';
-import { SourceDirsManager } from './dirs';
 import { t } from '../i18n/strings';
+import { displayPath, parseDirEntry } from '../util/uri';
 
 export class SourceDirsTreeProvider implements vscode.TreeDataProvider<SourceDirItem> {
 
   private emitter = new vscode.EventEmitter<SourceDirItem | undefined>();
   onDidChangeTreeData = this.emitter.event;
 
-  constructor(private dirsManager: SourceDirsManager) {}
+  /**
+   * Bridge callback: supplies the marked-dirs snapshot (URI strings).
+   * The provider never sees a SourceDirManager reference.
+   */
+  constructor(private getDirs: () => Promise<string[]>) {}
 
   refresh(): void {
     this.emitter.fire(undefined);
@@ -18,7 +22,7 @@ export class SourceDirsTreeProvider implements vscode.TreeDataProvider<SourceDir
   }
 
   async getChildren(): Promise<SourceDirItem[]> {
-    const dirs = await this.dirsManager.getAllDirs();
+    const dirs = await this.getDirs();
     if (dirs.length === 0) {
       const placeholder = new SourceDirItem(
         t.sourceDirsEmpty(),
@@ -29,11 +33,12 @@ export class SourceDirsTreeProvider implements vscode.TreeDataProvider<SourceDir
       placeholder.iconPath = new vscode.ThemeIcon('info');
       return [placeholder];
     }
-    return dirs.map((r) => {
-      const label = vscode.workspace.asRelativePath(r, false);
-      const item = new SourceDirItem(label, vscode.TreeItemCollapsibleState.None, 'dir', vscode.Uri.file(r));
+    return dirs.map((entry) => {
+      const uri = parseDirEntry(entry);
+      const label = vscode.workspace.asRelativePath(uri, false);
+      const item = new SourceDirItem(label, vscode.TreeItemCollapsibleState.None, 'dir', uri);
       item.description = label;
-      item.tooltip = r;
+      item.tooltip = displayPath(uri);
       item.iconPath = new vscode.ThemeIcon('debug-breakpoint', new vscode.ThemeColor('charts.red'));
       return item;
     });

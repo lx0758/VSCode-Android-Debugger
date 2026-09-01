@@ -503,7 +503,7 @@ internal class Evaluator(
                         "无法写入局部变量 '${target.name}' (final / 合成 / 参数槽位?). ${e.message}"
                     )
                 }
-                Logging.info("evaluate: 局部变量 ${target.name} = $newValue")
+                Logging.info("[Eval] evaluate: 局部变量 ${target.name} = $newValue")
                 return newValue
             }
             is ExprNode.Field -> {
@@ -520,7 +520,7 @@ internal class Evaluator(
                         "无法修改 ${kind} 字段 '${type.name()}.${target.name}'. ${e.message}"
                     )
                 }
-                Logging.info("evaluate: 字段 ${type.name()}.${target.name} = $newValue")
+                Logging.info("[Eval] evaluate: 字段 ${type.name()}.${target.name} = $newValue")
                 return newValue
             }
             is ExprNode.Index -> {

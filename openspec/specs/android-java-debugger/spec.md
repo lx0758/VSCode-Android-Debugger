@@ -167,58 +167,6 @@ The extension SHALL support multi-root workspaces (`.code-workspace` files), rea
 - **AND** opening the `.code-workspace` shows an empty source-dir list (independent storage)
 - **AND** marking a path in the `.code-workspace` window stores it in that workspace's Memento, not the single-folder one
 
-### Requirement: Remote-SSH Scenario C1 (Dual-Loaded Extension with Remote TS Indexer)
-
-When running in a Remote-SSH context where the source workspace is on a remote Linux server but the Android device and adb live on the local machine, the extension SHALL be loaded on **both** VSCode extension hosts (`extensionKind: ["ui", "workspace"]`). The local host SHALL run all adb commands, host all user UI, and spawn the Java Adapter as a local child process. The remote host SHALL expose a `buildIndex(sourceDirs)` API that walks the workspace using native filesystem reads and returns `FQN → file path` entries. The local host SHALL call this API via `vscode.extensions.getExtension(...).exports.buildIndex(...)` and send the returned entries to the Java Adapter via the DAP `sourceDirs/set` custom request. There SHALL be no SSH tunnels, no remote Java process, and no cross-host DAP routing.
-
-#### Scenario: Local VSCode + Remote SSH (full scenario C1)
-- **GIVEN** user has a `ssh-remote` workspace open in VSCode (workspace is on a remote Linux server)
-- **AND** user has an Android device USB-connected to their local laptop
-- **AND** user has marked source dirs in the remote workspace (paths stored as absolute strings in the remote workspace's `workspaceState` Memento)
-- **WHEN** user invokes "Debugger with Android" and selects a process
-- **THEN** the local extension host picks a free OS-assigned port `LP` via `net.createServer().listen(0)`
-- **AND** runs `adb devices` locally to verify the device is connected
-- **AND** runs `adb jdwp -l` locally to enumerate debuggable PIDs
-- **AND** shows the QuickPick UI in the user's local VSCode window
-- **AND** after process selection, runs `adb forward tcp:LP jdwp:<pid>` on the local machine
-- **AND** retrieves the remote extension via `vscode.extensions.getExtension('publisher.debugger-for-android')`
-- **AND** calls `await ext.exports.buildIndex(sourceDirs)` — VSCode proxies this call to the remote ext host
-- **AND** the remote ext host uses `vscode.workspace.findFiles` + `vscode.workspace.fs.readFile` (native FS read on remote) to walk each source dir, parses `package` + class declarations in TS, and returns `[{fqn, file}, ...]`
-- **AND** the local ext sends the entries to the Java Adapter via DAP `sourceDirs/set`
-- **AND** spawns the Java Adapter as a local child process; the Adapter connects to `127.0.0.1:LP` directly (no SSH tunnel)
-- **AND** the JDWP socket data flows: Java Adapter → local `adb forward` → device JDWP socket
-
-#### Scenario: Remote ext activation succeeds (fast path)
-- **WHEN** `vscode.extensions.getExtension('publisher.debugger-for-android').exports.buildIndex(sourceDirs)` is called
-- **AND** the remote ext host has activated successfully
-- **THEN** the call returns within seconds (typically <10s for 10k files via native FS)
-- **AND** the local ext proceeds with sending entries to Java Adapter and starting the debug session
-
-#### Scenario: Remote ext activation fails (fallback path)
-- **WHEN** the call to `ext.exports.buildIndex(sourceDirs)` throws (remote ext not activated, network blip, version mismatch)
-- **THEN** the local ext catches the error and falls back to its own cross-host indexing: it iterates `vscode.workspace.findFiles` + `vscode.workspace.fs.readFile` directly (slow path)
-- **AND** shows a status bar message: "Remote indexer unavailable, using slower local indexing (this may take several minutes)"
-- **AND** the debug session still proceeds once indexing completes
-- **AND** a subsequent attach (after the user reopens VSCode or retries) will retry the fast path
-
-#### Scenario: Single-host (scenario A) skips the remote ext entirely
-- **WHEN** user opens a local folder (no `remoteName`)
-- **THEN** the extension checks `vscode.env.remoteName`; if undefined, runs the indexer in the local ext directly (no IPC to a remote ext)
-- **AND** adb commands run as a local child process, no ssh involved
-- **AND** no SSH process is spawned, no tunnel is opened
-- **AND** the local indexer uses `vscode.workspace.fs.readFile` against local URIs (native local FS, fast — equivalent to scenario C1 fast path)
-
-#### Scenario: Indexing progress and cancellation
-- **WHEN** the indexer (on either local or remote ext) is running
-- **THEN** the user sees a VSCode progress notification ("Indexing N/M files in <sourceDir>…") with a cancel button
-- **AND** if the user cancels, the indexer stops and the user is told the session cannot start without a complete index
-- **AND** progress is reported every 50 files or every 1 second, whichever comes first
-
-#### Scenario: Large source dir warning
-- **WHEN** a marked source dir contains more files than `debugger-for-android.index.maxFiles` (default 10000)
-- **THEN** before indexing starts, the extension shows a confirmation dialog: "Source dir `<path>` contains ~<N> files. Indexing may take ~<estimated_seconds>. Continue or pick a narrower dir?"
-- **AND** if the user declines, prompts them to unmark or pick a narrower dir
-
 ### Requirement: OS-Assigned Random JDWP Port
 
 The extension SHALL use OS-assigned ephemeral ports (not a fixed range) for `adb forward` and the local JDWP listener.
@@ -235,62 +183,51 @@ The extension SHALL use OS-assigned ephemeral ports (not a fixed range) for `adb
 - **AND** if all 3 attempts fail, shows: "Could not allocate JDWP port — please retry"
 - **AND** does not start the debug session
 
-### Requirement: Remote-Side TS SourceIndexer API
-
-The remote ext host (`kind=workspace`) SHALL expose a `buildIndex(sourceDirs: string[]): Promise<FqnEntry[]>` API via its `activate()` return value. The local ext SHALL retrieve and call this API via `vscode.extensions.getExtension().exports.buildIndex(...)`.
-
-#### Scenario: API surface
-- **WHEN** the remote ext's `activate()` runs
-- **THEN** it returns an object with at least one method: `buildIndex(sourceDirs: string[]): Promise<Array<{fqn: string, file: string}>>`
-- **AND** calling this method with an empty array returns `[]` immediately
-- **AND** calling this method with multiple source dirs walks all of them and aggregates the entries
-- **AND** the returned entries have absolute file paths (matching what VSCode sends in DAP breakpoint paths)
-
-#### Scenario: Native FS performance
-- **WHEN** `buildIndex(sourceDirs)` is called with a 10k-file scope
-- **THEN** the function completes in <30 seconds (native FS reads, no cross-host latency)
-- **AND** reads each file via `vscode.workspace.fs.readFile(uri)` which is a native FS call on the remote side
-- **AND** parses package + class declarations in TS using regex (no external parser library)
-- **AND** returns a flat array of `{fqn, file}` entries — no file content
-
-#### Scenario: Source dir outside the workspace
-- **WHEN** a `sourceDir` path is not inside any open workspace folder
-- **THEN** `vscode.workspace.findFiles` returns an empty result for that dir
-- **AND** the indexer silently skips that dir (no error, no warning)
-- **AND** the user sees the empty entry list reflected in the Java Adapter
-
-#### Scenario: File read error
-- **WHEN** `fs.readFile` fails for a particular file (permissions, file deleted between findFiles and readFile)
-- **THEN** the indexer skips that file and continues with the next
-- **AND** logs a warning to the extension output channel
-- **AND** does NOT abort the entire buildIndex call
-
 ### Requirement: TS-Side SourceIndexer (Shared Logic)
 
-The class-name parser and `addDir` / `addFile` logic SHALL be implemented in TypeScript in `extension/src/source/indexer.ts`. The same module SHALL be reused by both the local ext host (scenario A and the C1 fallback path) and the remote ext host (scenario C1 fast path). The Kotlin/Java adapter SHALL NOT walk the filesystem or parse source files.
+The class-name parser and `addDir` / `addFile` logic SHALL be implemented in TypeScript in `extension/src/core/indexer/`. The single `LocalIndexer` implementation SHALL serve both local and Remote-SSH windows — because the extension always runs on the UI host, all filesystem access SHALL go through `vscode.workspace.fs` / `vscode.workspace.findFiles`, which transparently proxy to the remote filesystem (Node `fs` SHALL NOT be used; it can only see the local disk). The Kotlin/Java adapter SHALL NOT walk the filesystem or parse source files.
 
 #### Scenario: TS indexer parses Java files
+
 - **WHEN** the indexer reads a `.java` file via `vscode.workspace.fs.readFile(uri)`
-- **THEN** it extracts the `package` declaration and all top-level class/interface/enum/record declarations (including nested ones by indentation match)
-- **AND** for each declaration, builds a fully-qualified name and adds `fqn → filePath` to the index map
+- **THEN** it extracts the `package` declaration and all top-level class/interface/enum/record declarations
+- **AND** for each declaration, builds a fully-qualified name and adds `fqn → canonicalPath(uri)` to the index map
 
 #### Scenario: TS indexer parses Kotlin files
+
 - **WHEN** the indexer reads a `.kt` file
 - **THEN** it extracts the `package` declaration and all top-level `class`/`object`/`interface`/`sealed class`/`data class` declarations
-- **AND** for each declaration, builds a fully-qualified name (Kotlin objects are referenced by their declared name, not instance) and adds it to the map
+- **AND** for each declaration, builds a fully-qualified name and adds it to the map
+
+#### Scenario: Source enumeration reaches remote workspaces
+
+- **WHEN** a marked source dir belongs to a workspace folder (local or remote)
+- **THEN** the indexer enumerates sources via `vscode.workspace.findFiles(new RelativePattern(dirUri, '**/*.{java,kt}'))` — the glob runs on the filesystem provider host, so in a Remote-SSH window the bulk listing executes on the remote
+- **WHEN** a marked source dir is outside any workspace folder
+- **THEN** the indexer walks it via `vscode.workspace.fs.stat` + `vscode.workspace.fs.readDirectory` recursion (skipping `build`/`.git`/dot-dirs), which still reaches the remote FS from the UI host
+- **AND** neither path uses Node `fs`
 
 #### Scenario: Kotlin adapter receives pre-built index
-- **WHEN** the TypeScript extension completes indexing (either via remote ext fast path or local fallback path)
-- **THEN** it sends a DAP custom request `sourceDirs/set` with payload `{entries: [{fqn: "com.android.server.am.AMS", file: "/remote/path/.../AMS.java"}, ...]}`
-- **AND** the Kotlin adapter populates internal `fqnToFile` and `fileToFqns` maps from the entries
-- **AND** no file content is sent (only paths)
+
+- **WHEN** the TypeScript extension completes indexing (single `LocalIndexer` path, local or remote window)
+- **AND** a debug session starts
+- **THEN** the session initializer (wired in `extension.ts`) reads `IndexManager.getAllEntries()` and sends the `custom/syncSourceIndex` custom request with the entries
+- **AND** the Kotlin adapter's `SourceIndex` is populated from that request
+- **AND** no file content is sent (only paths); no temp file is used; no `--index-file` CLI argument
 
 #### Scenario: Kotlin adapter uses index for breakpoint resolution
-- **WHEN** VSCode sends `setBreakpoints` with `source.path = "/remote/path/.../AMS.java"` and several line numbers
-- **THEN** the Kotlin adapter looks up `fileToFqns[path]` to get the FQNs declared in that file
-- **AND** calls JDI `VirtualMachine.classesByName(fqn)` for each FQN to obtain `ReferenceType`
-- **AND** resolves line numbers to JDI bytecode offsets via `Method.locationsOfLine()`
+
+- **WHEN** VSCode sends `setBreakpoints` whose `source.path` is a full URI in a remote window (e.g. `vscode-remote://ssh-remote%2Bhost/home/liux/.../AMS.java`)
+- **THEN** the adapter normalizes it via `normalizeSourcePath` (strips `vscode-remote://<authority>` / `file://<authority>` prefixes, yielding the bare posix path) before any registry or index lookup
+- **AND** the normalized key matches the `file` field of `custom/syncSourceIndex` entries
+- **AND** the adapter resolves FQNs via `fileToFqns[key]`, calls JDI `VirtualMachine.classesByName(fqn)` for each FQN to obtain `ReferenceType`, resolves line numbers to JDI bytecode offsets via `Method.locationsOfLine()`
 - **AND** creates JDI `BreakpointRequest`s and sends a DAP response with `verified: true/false`
+
+#### Scenario: Canonical path model is uniform across environments
+
+- **WHEN** any file key crosses a boundary (index entries, breakpoint payloads, adapter registry keys)
+- **THEN** it uses the canonical form defined in `extension/src/util/uri.ts`: `uri.fsPath` for `file:` URIs (preserves historical local behavior, e.g. `C:\x\Y.java`), `uri.path` for every other scheme (e.g. `/home/liux/Y.java`)
+- **AND** marked source dirs in Memento are stored as URI strings (`uri.toString()`), never `uri.fsPath` (which mangles remote URIs on a Windows UI host)
 
 ### Requirement: No SSH Tunnel Required
 
@@ -333,37 +270,55 @@ The previous `Setup Cross-host Tunnel` command SHALL be removed entirely. There 
 
 ### Requirement: Incremental Source Index Updates
 
-The extension SHALL keep the Java Adapter's `SourceIndex` in sync with the user's workspace state during an active debug session, without requiring the user to re-attach. Updates SHALL use two DAP custom requests: `sourceDirs/set` (full replace, existing) and `sourceDirs/add` (incremental merge, new).
+The extension SHALL keep the Java Adapter's `SourceIndex` in sync with the user's workspace state during an active debug session, without requiring the user to re-attach. Mid-session updates SHALL use the `custom/syncSourceIndex` DAP custom request (full replace; the former `sourceDirs/add` incremental-merge request was removed — the client never used it, and full replace keeps the adapter's logic simple).
 
 #### Scenario: sourceDirs config changes mid-session (full replace)
-- **WHEN** user adds or removes a folder from the marked source dirs while a debug session is active
-- **THEN** the local ext re-builds the entire index from the current marked dirs (using the same fast-path / fallback-path mechanism as the initial attach)
-- **AND** sends the new entries to the Java Adapter via DAP `sourceDirs/set` (replacing the old index)
-- **AND** subsequent `setBreakpoints` calls resolve against the new index
-- **AND** the user sees a status-bar / progress indication during the re-build (or, for AOSP-scale projects, a brief "Re-indexing..." message)
+
+- **WHEN** user adds or removes a folder from the marked source dirs while one or more debug sessions are active
+- **THEN** `SourceDirManager` emits its change event
+- **AND** `extension.ts` bridges to `IndexManager.rebuildFromDirs(getAllDirs(), maxFiles)` which rebuilds the in-memory index
+- **AND** emits `onIndexReady(allEntries)` which `extension.ts` bridges to `SessionManager.broadcastIndex(allEntries)`
+- **AND** `broadcastIndex` iterates every live `SessionContextImpl` and calls `ctx.dap.syncSourceIndex(entries)`, which sends the DAP `custom/syncSourceIndex` custom request with the new entries
+- **AND** subsequent `setBreakpoints` calls in every live session resolve against the new index
 
 #### Scenario: Breakpoint set in unindexed file (auto-include via add)
+
 - **WHEN** user sets a breakpoint in a `.java` or `.kt` file that is not under any marked source dir AND a debug session is active
-- **THEN** the extension reads just that file (`vscode.workspace.fs.readFile`), parses class declarations in TS (reusing `parseJavaFile` / `parseKotlinFile`)
-- **AND** sends the entries to the Java Adapter via DAP `sourceDirs/add` (merging into the existing index)
-- **AND** the breakpoint resolves correctly (`verified: true`) on the next `setBreakpoints` round-trip without requiring the user to mark the file's parent dir
+- **THEN** `BreakpointManager` emits `onNewFileNeedsIndex([uris])` (only for files outside marked dirs, judged via the injected `isPathMarked` callback that receives `vscode.Uri`s)
+- **AND** `extension.ts` bridges to `IndexManager.autoIncludeFiles(uris)` which parses and merges the entries in-memory (reads via `vscode.workspace.fs.readFile`, so remote files work too)
+- **AND** `IndexManager` then emits `onIndexReady(allEntries)` → `extension.ts` → `SessionManager.broadcastIndex` → every live session calls `ctx.dap.syncSourceIndex`
+- **AND** each session's adapter receives `custom/syncSourceIndex` with the merged entries (full replace, not partial merge — keeps the adapter's logic simple)
+- **AND** the breakpoint resolves correctly on the next `setBreakpoints` round-trip
 
 #### Scenario: Auto-include is silent on the wire for non-Java/Kotlin breakpoints
+
 - **WHEN** a breakpoint is added in a non-`.java`/`.kt` file (e.g., `.txt`, `.gradle`, `.xml`)
-- **THEN** the extension does NOT send `sourceDirs/add`
-- **AND** the adapter's index is unchanged
+- **THEN** `BreakpointManager` does NOT emit `onNewFileNeedsIndex`
+- **AND** no `custom/syncSourceIndex` is sent
+- **AND** each adapter's index is unchanged
+
+#### Scenario: Session ends mid-watch
+
+- **WHEN** a session's adapter process exits (normal `disconnect`, crash, or user cancels)
+- **THEN** the corresponding `SessionContextImpl` is disposed
+- **AND** `SessionManager.sessions.delete(sessionId)` runs
+- **AND** any subsequent `sourceDirs` config change or breakpoint change still emits broadcasts but the disposed session is no longer in the map (no DAP request sent to it)
+- **AND** a new attach creates a fresh `SessionContextImpl`
 
 #### Scenario: Adapter no longer accepts file-walking requests
-- **WHEN** the Java Adapter receives a request of type `sourceDirs/set` or `sourceDirs/add`
-- **THEN** it accepts only the new payload shape: `{entries: [{fqn, file}, ...]}`
+
+- **WHEN** the Java Adapter receives any DAP request related to source indexing (the post-attach initial `custom/syncSourceIndex` push from the session initializer, or mid-session `custom/syncSourceIndex`)
+- **THEN** it accepts only the entry-list shape: `Array<{fqn: string, file: string, sourceUri?: string}>` — no directory paths, no file contents, no walk instructions
 - **AND** the adapter has NO filesystem access for source indexing (no `Files.walk`, no parser regexes)
 - **AND** all FS walking and parsing happens in TS
 
-#### Scenario: Session ends mid-watch
-- **WHEN** the Java Adapter process exits (normal `disconnect`, crash, or user cancels)
-- **THEN** the extension's index-sync coordinator is disposed (listeners removed, references cleared)
-- **AND** any subsequent `sourceDirs` config change or breakpoint change is a no-op (no DAP requests sent)
-- **AND** a new attach creates a fresh coordinator
+#### Scenario: DAP echoes use the client-resolvable path form
+
+- **WHEN** the adapter echoes a source path back to VSCode (breakpoint events, `stopped` events, `stackTrace`, `loadedSources`)
+- **THEN** it uses the display form, never the bare posix internal key: the entry's `sourceUri` (full `vscode-remote://...` URI) when present, the canonical key otherwise (a native local path)
+- **AND** breakpoint payloads pushed by the extension use the same rule (`clientPath`: fsPath for `file:` URIs, full URI otherwise)
+- **WHEN** a Windows UI host runs a Remote-SSH window and a breakpoint hits
+- **THEN** the `stopped`/`stackTrace` source path is a `vscode-remote://` URI that VSCode resolves through the remote filesystem provider — a bare posix path would render as `\home\...` and fail to open the file and to light up the verified breakpoint
 
 ### Requirement: JDK Detection
 
@@ -389,91 +344,80 @@ Log breakpoint messages and other diagnostic information SHALL be emitted to the
 
 ### Requirement: Atomic Session Teardown
 
-Every debug session SHALL be fully torn down on termination: the Java Adapter JVM SHALL be killed AND the `adb forward` for the session's JDWP port SHALL be removed. Both teardown steps happen in `onDidTerminateDebugSession` BEFORE VSCode starts any new session. The extension SHALL also support VSCode's built-in Restart toolbar button by having the factory rebuild both the adb forward AND the JVM in `createDebugAdapterDescriptor` when it sees the tracked JVM has died; the JVM is told `--jdwp-port=<new>` on its command line so it ignores the stale `__jdwpPort` from the DAP `attach` request and connects to the freshly-installed forward instead.
+Every debug session SHALL be fully torn down on termination: the session's Java Adapter JVM SHALL be killed AND the session's `adb forward` for the session's JDWP port SHALL be removed. Both teardown steps happen in `onDidTerminateDebugSession`. Each session SHALL own its own JVM process and its own per-session `AdbDevice` reference — there is no shared global state between sessions. Per-session teardown MUST be self-contained: terminating session A MUST NOT touch any resource owned by session B.
 
 #### Scenario: Normal session end
+
 - **WHEN** user clicks VSCode's Stop button or the session ends for any reason
-- **THEN** `onDidTerminateDebugSession` reads `__jdwpPort` from the session's configuration
-- **AND** calls `removeForward(__jdwpPort)` on the shared `AdbJdwpController`
-- **AND** calls `factory.killActive()` which `kill()`s the tracked JVM `ChildProcess` and clears `currentJdwpPort` (so the factory no longer believes any forward is alive)
+- **THEN** `onDidTerminateDebugSession` looks up the `SessionContextImpl` for that session id in `SessionManager.sessions`
+- **AND** calls `ctx.dispose()` which: (a) reads the session's own `jdwpPort` (not any factory-tracked port), (b) calls `removeForward(jdwpPort)` on the session's own `AdbDevice`, (c) `kill()`s the session's own tracked `ChildProcess`, (d) removes the session from `SessionManager.sessions`
 - **AND** the next attach starts from a clean slate: brand-new DAP port, brand-new JDWP port, brand-new JVM process, brand-new adb forward
+- **AND** any other live sessions continue running undisturbed
+
+#### Scenario: Two concurrent sessions, one terminates
+
+- **WHEN** user has two active debug sessions (session-A and session-B) on different devices
+- **AND** user stops session-A
+- **THEN** only session-A's JVM is killed and only session-A's adb forward is removed
+- **AND** session-B's JVM, adb forward, and SourceIndex remain intact
+- **AND** session-B does not need to re-handshake or be re-attached
+
+#### Scenario: Extension deactivated mid-session
+
+- **WHEN** VSCode is reloading the extension or shutting down while one or more sessions are active
+- **THEN** `deactivate()` calls `sessionManager.disposeAll()` which iterates every entry in `sessions` and calls `ctx.dispose()`
+- **AND** for each session: JVM is killed, adb forward is removed
+- **AND** any adb forward left over (force-quit where `deactivate` may not run) persists on the device until the user runs `adb kill-server`
+
+#### Scenario: Session creation fails after adb forward succeeds
+
+- **WHEN** user has invoked attach, picked a device + process, and `adb forward tcp:LP jdwp:<pid>` succeeded
+- **AND** the JVM spawn step then fails (bad javaPath, port collision, etc.)
+- **THEN** the partial-session cleanup path runs: the adb forward at `LP` is removed and the temp DAP port is released
+- **AND** no zombie adb forward remains on the device
 
 #### Scenario: VSCode-native Restart works via factory rebuild
+
 - **WHEN** user clicks VSCode's debug toolbar Restart button while an Android debug session is active
-- **THEN** VSCode sends `disconnect` (the JVM-side DapServer shuts down its client socket and the tracked JVM is killed by `onDidTerminate`), then starts a new session with a copy of the original configuration (including `__jdwpPort` and `__adapterPort`)
-- **AND** the new session asks the factory for a descriptor; the factory reads `__adapterPort`, checks `isProcAlive` on the tracked JVM
-- **AND** since the JVM was already killed on terminate, `isProcAlive` returns false
-- **AND** the factory calls `spawnFreshAdapter()` which: (a) allocates a NEW JDWP port via `new AdbJdwpController(runner).forwardJdwp(pid)`, (b) allocates a NEW DAP port via `allocateFreePort()`, (c) spawns a fresh JVM with `--port=<newDap> --jdwp-port=<newJdwp> --index-file=...`, (d) waits for the JVM to print `READY`
-- **AND** the factory returns `DebugAdapterServer(newDap)` to VSCode
-- **AND** VSCode connects to the new DAP port; the JVM accepts; VSCode fires `attach` (carrying the OLD `__jdwpPort` in its `port` field)
-- **AND** the JVM-side `DapServer.handleAttach` reads `args["port"]` and falls back to the `jdwpPortOverride` constructor parameter (set from `--jdwp-port`) — since the override differs, it logs the override and connects to the FRESH JDWP port instead
-- **AND** the new session reaches the device's JDWP socket and debugging continues normally
+- **THEN** VSCode terminates the current session — `onDidTerminateDebugSession` fires, looks up `SessionContextImpl` in `SessionManager.sessions`, and calls `ctx.dispose()` which kills the JVM and removes the adb forward
+- **AND** VSCode then starts a new session using a clone of the original configuration (including `__device` / `__pid`)
+- **AND** the factory lambda (registered by `SessionManager`) is invoked for the new session — it constructs a fresh `SessionContextImpl` via `SessionContextImpl.create(...)`, which allocates a NEW DAP port, a NEW JDWP port, a fresh adb forward, and spawns a fresh JVM, then awaits `READY`
+- **AND** the factory returns `DebugAdapterServer(newDapPort)` to VSCode
+- **AND** when the new session starts, the session initializer (wired in `extension.ts`) pushes the current `IndexManager` snapshot to the new session via the `custom/syncSourceIndex` custom request
+- **AND** the new session reaches the device's JDWP socket via the freshly installed forward and debugging continues normally
+- **AND** the previous session's `SessionContextImpl` is gone from `SessionManager.sessions` — no shared state carries over between restarts
 
 #### Scenario: VSCode is force-quit mid-session
+
 - **WHEN** the user closes VSCode without properly terminating the debug session (process kill, OS shutdown)
 - **THEN** the `onDidTerminateDebugSession` hook never fires
-- **AND** the extension's `deactivate()` calls `factory.killActive()` (kills any tracked JVM) and `jdwp.cleanupAllForwards()` (removes every tracked adb forward)
+- **AND** the extension's `deactivate()` calls `sessionManager.disposeAll()` which iterates every entry in `sessions` and calls `ctx.dispose()` (kills each tracked JVM and removes each tracked adb forward)
 - **AND** any adb forward left over on the device (force-quit where `deactivate` may also not run) persists until the user runs `adb kill-server`; documented as Open Question 7
 
 ### Requirement: Custom Restart Command
 
-The extension SHALL register a command `debugger-for-android.restartSession` (label: "Android: Restart Debug Session") that re-attaches to the same target PID with a brand-new forward, JVM, and DAP port. The command SHALL be visible in the command palette only when the active debug session is of type `android-java` (gated by `when: "debugType == 'android-java'"` in `package.json`).
+The extension SHALL register a command `debugger-for-android.restartSession` (label: "Android: Restart Debug Session") that stops the active Android debug session and starts a new one against the same target PID with a brand-new forward, JVM, and DAP port. The command SHALL be visible in the command palette only when the active debug session is of type `android-java` (gated by `when: "debugType == 'android-java'"` in `package.json`).
 
 #### Scenario: Restart command with active Android session
+
 - **WHEN** user invokes "Android: Restart Debug Session" while an Android debug session is active
-- **THEN** the command reads `__pid` from the active session's configuration
-- **AND** calls `vscode.debug.stopDebugging(session)` — the atomic-teardown hook fires and tears down JVM + forward
-- **AND** then calls `runAttachToPidCommand(statusBar, deps, pid)` which walks the full attach flow: pre-flight checks (adb/JDK/jar), build a new `AdbJdwpController`, fresh `forwardJdwp`, fresh JVM spawn, fresh `startDebugging`
-- **AND** the new session's `__adapterPort`, `__jdwpPort`, and `__pid` are all newly allocated
+- **THEN** the command looks up the active session's `SessionContextImpl` in `SessionManager.sessions`
+- **AND** reads the device + process from `ctx.device` and `ctx.process` (previously read from session configuration `__pid`)
+- **AND** calls `vscode.debug.stopDebugging(session)` — the atomic-teardown hook fires and tears down the JVM + forward
+- **AND** then calls `sessionManager.attachToProcess(ctx.device, ctx.process)` which starts a fresh attach flow (build session config, call `startDebugging`, factory constructs a new `SessionContextImpl`)
+- **AND** the new session's ports, JVM, adb forward, and SourceIndex are all newly allocated
 
 #### Scenario: Restart command with no active session
+
 - **WHEN** user invokes "Android: Restart Debug Session" with no active debug session, or with an active session of a different type
 - **THEN** the command shows a warning: "No active Android debug session to restart"
 - **AND** does not throw or attempt any teardown
 
 #### Scenario: Restart command loses `__pid` from an old session
-- **WHEN** the active session was started by an older extension version that did not stamp `__pid` into the configuration
-- **THEN** the command shows a warning: "Session is missing target PID; was started by an older extension version"
-- **AND** does not invoke `runAttachToPidCommand`
 
-### Requirement: Shared AdbJdwpController (forward tracking)
-
-The `AdbJdwpController` instance SHALL be shared across `attach.ts` (which calls `forwardJdwp` / `removeForward`), the factory's `spawnFreshAdapter` (which constructs a fresh `tmpController` on every toolbar Restart and registers it via `setJdwpController`), and `extension.local.ts` (which calls `removeForward` from `onDidTerminateDebugSession` and `cleanupAllForwards` from `deactivate`). Sharing SHALL be implemented as a module-level singleton (`extension/src/debug/jdwpRegistry.ts`) holding the last-constructed instance, because each instance's `activeForwards` Set is the source of truth for which adb forwards are currently open — if every attach creates a new controller and discards it, the in-memory set becomes empty even though adb still has the forwards bound.
-
-The factory SHALL additionally track the LATEST JDWP port (`factory.getJdwpPort()`, exposed as `currentJdwpPort`) as the authoritative source for "which port's forward needs to be torn down on session end". `onDidTerminateDebugSession` MUST read `factory.getJdwpPort()` (NOT `session.configuration.__jdwpPort`) because VSCode's toolbar Restart clones the FIRST session's configuration for every subsequent restart — `__jdwpPort` in the session config is therefore stale (points at the original attach's port) on the 2nd+ restart. Trusting the session config would silently no-op `removeForward` (short-circuiting on the `activeForwards.has(port)` guard) and LEAK the forward across every restart after the first. The session config's `__jdwpPort` SHALL only be used as a fallback for the rare case where the factory is blind (extension reload between sessions).
-
-#### Scenario: Forward tracked across attach / terminate / restart
-- **WHEN** `runAttachCommand` constructs a new `AdbJdwpController` and calls `forwardJdwp(pid)` (allocates port `LP` and runs `adb forward tcp:LP jdwp:<pid>`)
-- **THEN** the controller is registered via `setJdwpController(controller)` in `jdwpRegistry`
-- **AND** when `onDidTerminateDebugSession` fires, `extension.local.ts` calls `getJdwpController().removeForward(LP)` — the SAME instance the attach command used, so `activeForwards` still has `LP` in it
-- **AND** the `adb forward --remove tcp:LP` invocation succeeds
-- **AND** without the singleton, the controller instance from `attach.ts` would be GC'd before terminate runs, leaving an unrecoverable forward on the device
-
-#### Scenario: Forward tracked across toolbar Restart (factory rebuild)
-- **WHEN** the toolbar Restart button fires, VSCode ends the current session, then starts a new session using the OLD configuration
-- **AND** `onDidTerminateDebugSession` reads the JDWP port from `factory.getJdwpPort()` (the factory's tracked port, which is the port that was JUST torn down) and calls `getJdwpController().removeForward(port)` to clean up the OLD forward
-- **THEN** the factory's `createDebugAdapterDescriptor` is called for the new session. Because the tracked JVM is dead, it calls `spawnFreshAdapter` which:
-  1. Constructs a fresh `tmpController = new AdbJdwpController(restartRunner)`
-  2. Calls `tmpController.forwardJdwp(pid)` to allocate port `LP2` and run `adb forward tcp:LP2 jdwp:<pid>`
-  3. Calls `setJdwpController(tmpController)` to register the NEW controller with the registry — **this step is required** so the next `onDidTerminateDebugSession` finds a controller whose `activeForwards` includes `LP2`. Without it, the registry would still point at the attach-time controller (whose `activeForwards` doesn't include `LP2`); `removeForward(LP2)` would short-circuit on the `activeForwards.has(port)` guard and silently no-op, leaving `LP2` forwarded on the device across every subsequent restart.
-  4. Spawns a fresh JVM with `--jdwp-port=<LP2>` and returns the new DAP port
-  5. Updates `factory.currentJdwpPort = LP2` (the factory tracks the LATEST JDWP port — never the one in the session config; see next scenario)
-- **AND** the next `onDidTerminateDebugSession` (e.g. on the SECOND toolbar Restart) reads `factory.getJdwpPort() = LP2` and calls `getJdwpController().removeForward(LP2)` — `tmpController.activeForwards` includes `LP2`, so `adb forward --remove` runs and the forward is cleaned up correctly
-
-#### Scenario: 2nd+ toolbar Restart uses factory-tracked JDWP port (NOT session config)
-- **WHEN** the toolbar Restart button is clicked a SECOND (or later) time on the same debug session
-- **AND** VSCode clones the FIRST session's configuration for the new session — so the new session's `session.configuration.__jdwpPort` is still the original attach-time port (e.g. `LP1`), NOT the latest restart-allocated port (`LP2`)
-- **THEN** `onDidTerminateDebugSession` MUST read the JDWP port from `factory.getJdwpPort()` (which holds `LP2`, the LATEST spawnFreshAdapter allocation), not from `session.configuration.__jdwpPort` (which holds the stale `LP1`)
-- **AND** the `factory.killActive()` call happens AFTER `factory.getJdwpPort()` because `killActive` clears the tracked port
-- **AND** `getJdwpController().removeForward(LP2)` succeeds because the registered `tmpController.activeForwards` includes `LP2`
-- **AND** if the extension had instead trusted `session.configuration.__jdwpPort = LP1`, then `removeForward(LP1)` would short-circuit on `tmpController.activeForwards.has(LP1) === false` and silently no-op — leaving `LP2` (and `LP3`, `LP4`, … on subsequent restarts) forwarded on the device forever
-- **AND** `session.configuration.__jdwpPort` SHALL be treated as a fallback for the rare case where the factory is blind (e.g. extension reload between sessions) — not as the primary source
-
-#### Scenario: Extension deactivated mid-session
-- **WHEN** VSCode is reloading the extension or shutting down while a session is active
-- **THEN** `deactivate()` reads the registered controller from `jdwpRegistry`
-- **AND** calls `cleanupAllForwards()` which iterates `activeForwards` and runs `adb forward --remove tcp:<port>` for each, fire-and-forget
-- **AND** even if `onDidTerminateDebugSession` never fired (force-quit), no forwards leak
+- **WHEN** the active session was started by an older extension version that did not register a `SessionContextImpl` in `SessionManager.sessions` (e.g., no `__pid` stamped into the configuration)
+- **THEN** the command shows a warning: "Session is missing target context; was started by an older extension version"
+- **AND** does not invoke `sessionManager.attachToProcess`
 
 ### Requirement: Configurable Binary Paths
 
@@ -562,33 +506,6 @@ The attach command SHALL validate adb, JDK, and adapter jar BEFORE any device in
 - **THEN** `prepareAttachContext` returns the resolved `{jdk, jarPath, adbResult, runner}` context
 - **AND** the attach flow proceeds with device enumeration, process picker, then `attachToProcess` (forward → index → JVM → `startDebugging`)
 
-### Requirement: Adapter JVM Lifecycle Owned by Factory
-
-The `AndroidJavaFactory` SHALL own the `ChildProcess` reference for the active adapter JVM AND the JDWP port whose adb forward is bound to the current session. It SHALL NOT TCP-probe the adapter port to decide liveness — the adapter JVM listens on a single `accept()` slot per session, so a probe would steal that slot from VSCode's real DAP client. Instead, the factory SHALL check `proc.exitCode === null && proc.signalCode === null` (no `proc.kill` happened, no natural exit) via its own tracked `ChildProcess`. The factory SHALL also be able to rebuild a fresh JVM AND a fresh adb forward from `setRestartContext` so the toolbar Restart path works without going through `attach.ts` again.
-
-#### Scenario: Same-port session reuse
-- **WHEN** VSCode asks the factory for a descriptor for a new session whose `__adapterPort` equals `factory.currentPort`
-- **AND** `isProcAlive(adapterProc)` returns true
-- **THEN** the factory returns `new vscode.DebugAdapterServer(cfgPort)` — VSCode connects to the existing JVM
-- **AND** the JVM's accept loop (Decision 16) accepts the new DAP client
-
-#### Scenario: Tracked JVM is dead, restart context present (toolbar Restart path)
-- **WHEN** `isProcAlive` returns false (JVM was killed by `onDidTerminate` on a prior session)
-- **AND** `javaPath`, `jarPath`, `entries`, `runner`, and `pid` were captured via `setRestartContext` on the prior attach
-- **THEN** the factory calls `spawnFreshAdapter` which:
-  1. Allocates a NEW JDWP port via `new AdbJdwpController(runner).forwardJdwp(pid)` (the runner + pid came from `setRestartContext`)
-  2. Allocates a NEW DAP port via `allocateFreePort()`
-  3. Spawns a new JVM via `AdapterLauncher.launch({javaPath, jarPath, args: ['--port=<newDap>', '--jdwp-port=<newJdwp>', '--index-file=<file>']})` — the `--jdwp-port` CLI override tells the JVM to ignore the stale `__jdwpPort` from the DAP `attach` request and connect to the freshly-installed forward instead
-  4. Waits for "READY" on stderr within 10s
-- **AND** calls `setActiveAdapter(newProc, newDap, newJdwp)` to register the new JVM + new JDWP port
-- **AND** returns `new vscode.DebugAdapterServer(newDap)` to VSCode
-- **AND** VSCode connects; the JVM accepts; VSCode sends `attach` (carrying the OLD `__jdwpPort` in its `port` field); `DapServer.handleAttach` reads `args["port"]` and falls back to the `jdwpPortOverride` from `--jdwp-port` — since the override differs, the JVM logs the override and connects to `localhost:<newJdwp>` → forward → JDWP socket. Success.
-
-#### Scenario: No restart context
-- **WHEN** the factory has no `javaPath`/`jarPath`/`runner`/`pid` (e.g. extension was reloaded mid-session, `setRestartContext` was never called)
-- **THEN** `createDebugAdapterDescriptor` throws "Cannot restart: missing JVM spawn context. Run `Android Java Debugger: Attach to Process` once before restarting"
-- **AND** VSCode shows the error in the debug toolbar
-
 ### Requirement: Adapter Accepts Multiple Sessions
 
 The adapter JVM SHALL loop on `ServerSocket.accept()` and serve a fresh DapServer on every accepted client, rather than exiting after the first disconnect. Each accepted client SHALL run on its own daemon thread with its own request-handling executor.
@@ -613,27 +530,6 @@ The adapter JVM SHALL loop on `ServerSocket.accept()` and serve a fresh DapServe
 - **AND** `serverSocket.close()` runs
 - **AND** the JVM process exits
 
-### Requirement: Index Temp File Hygiene
-
-The extension SHALL write its source-index temp files to a single dedicated directory `${os.tmpdir()}/d4a-index/` (no nested per-process subdirs). File names SHALL be unique via `index-<process.pid>-<Date.now()>-<random6>.json`. The adapter is expected to delete the file after reading it (see adapter-side `loadInitialIndex`), so the file's lifetime is the time between the extension's `writeIndexFile` and the adapter's read. The extension SHALL additionally sweep stale files (older than 24h) at every activation.
-
-#### Scenario: Multiple parallel attachments don't collide
-- **WHEN** two attach commands run in the same VSCode window (rare but possible)
-- **AND** each calls `writeIndexFile(entries)`
-- **THEN** both files land in `${tmpdir}/d4a-index/` with different random suffixes — no collision
-- **AND** no nested `pid-${pid}/` subdirs (which were used in the previous design and made cleanup awkward)
-
-#### Scenario: Previous session crashed and left files
-- **WHEN** the extension activates and `${tmpdir}/d4a-index/` contains files older than 24h (e.g. a prior adapter crashed before its `finally` could delete)
-- **THEN** `sweepStaleIndexFiles()` deletes them
-- **AND** the activation proceeds normally
-- **AND** the sweep is best-effort: any per-file error (EACCES, ENOENT mid-sweep) is silently ignored
-
-#### Scenario: Attach fails between `writeIndexFile` and JVM start
-- **WHEN** the JVM fails to start (e.g. invalid `javaPath`) after the index file was already written
-- **THEN** the `cleanup()` function in `attach.ts` calls `fs.promises.unlink(indexFile).catch(...)` to remove the temp file
-- **AND** no temp file leaks
-
 ### Requirement: adb Output Log Truncation
 
 The adb runner SHALL truncate the stdout and stderr it logs on `proc.on('exit')` to prevent commands like `adb shell ps -A -o PID,NAME` (which return hundreds of process rows) from drowning the Output channel.
@@ -647,3 +543,141 @@ The adb runner SHALL truncate the stdout and stderr it logs on `proc.on('exit')`
 #### Scenario: Normal-length output
 - **WHEN** adb stdout is ≤ 200 chars (e.g. `adb devices` with one device)
 - **THEN** the runner logs the full stdout verbatim — no truncation marker is shown
+
+### Requirement: Single-Path TS SourceIndexer (Remote-SSH)
+
+Indexing SHALL use `LocalIndexer` in every window (local and Remote-SSH): no workspace-side indexer implementation exists and no code path SHALL depend on the `exports` of a same-ID workspace-host extension instance (unreachable by VSCode design). `IndexerFactory` and `RemoteIndexer` SHALL be retained as the injection seam for the future dual-extension architecture (a dedicated `extensionKind: ["workspace"]` helper extension), but until that helper exists the factory SHALL always resolve to `LocalIndexer`. In a remote window the extension SHALL surface the degraded indexing mode on the status bar (`remoteName` non-empty → `setIndexerMode('fallback')`) while indexing continues to work via the remote FS proxy.
+
+#### Scenario: Single indexer path replaces the remote/fallback split
+
+- **WHEN** indexing runs in any window (local or Remote-SSH)
+- **THEN** `LocalIndexer` performs enumeration via `vscode.workspace.findFiles` (in-workspace dirs) and `vscode.workspace.fs` recursion (out-of-workspace dirs)
+- **AND** no code path depends on a workspace-side `DebugRemoteApi` implementation (`remote/` stays empty) or on same-ID cross-host `exports`
+- **AND** in a remote window the status bar shows the degraded mode and indexing still succeeds
+
+#### Scenario: IndexerFactory seam is kept for the dual-extension future
+
+- **WHEN** `createIndexer` runs (today, in any window)
+- **THEN** it returns `LocalIndexer` — the probe for a remote indexer provider finds none because the workspace-side implementation is intentionally absent
+- **AND** `RemoteIndexer` compiles and is constructible from any `RemoteIndexApi`-shaped object, so the future helper extension swap is confined to `IndexerFactory`
+
+### Requirement: Tolerant Unmark (Marked-Dir Lifecycle Robustness)
+
+The `unmark` command SHALL always be able to remove a stored marked-dir entry, even when the stored entry was written by a buggy older version under a wrong path form (e.g. a mangled Windows `C:\home\...` fsPath for a remote dir). `SourceDirManager.removeDir` SHALL match entries across all stored forms (URI string, `uri.path`, `fsPath`, Windows case-insensitively), SHALL return whether anything was removed, and the unmark command SHALL NOT gate on a `contains` precheck.
+
+#### Scenario: Unmark a wrongly-stored remote dir
+
+- **WHEN** the Memento contains a legacy mangled entry (e.g. `file:///c%3A/home/liux/projects/...` produced by `uri.fsPath` + `path.resolve` on a Windows UI host)
+- **AND** the user runs *Unmark source dir* on the corresponding folder in a Remote-SSH window
+- **THEN** `removeDir` matches and removes the entry by resolved-fsPath form comparison
+- **AND** the command reports success instead of a "not a marked dir" error
+
+#### Scenario: Unmark with no matching entry
+
+- **WHEN** no stored entry matches the target in any form
+- **THEN** `removeDir` returns `false` without mutating the Memento
+- **AND** the command shows the "not a marked dir" message
+
+### Requirement: Multi-Session Concurrency
+
+The extension SHALL support multiple concurrent Android debug sessions active in the same VSCode window. Each session SHALL be independent: a failure or termination in one session SHALL NOT affect any other session. The user SHALL be able to attach to device-A/process-X and device-B/process-Y simultaneously.
+
+#### Scenario: Two sessions attached concurrently
+
+- **WHEN** user invokes "Attach to Process" twice in succession (e.g., once for an app on device-A, once for an app on device-B)
+- **THEN** both sessions reach the running state
+- **AND** each session has its own JDI connection to its own JDWP socket
+- **AND** each session has its own SourceIndex (initial index pushed via `custom/syncSourceIndex` after session start; both populated from the shared in-memory `IndexManager` entries)
+- **AND** each session's breakpoints, stack traces, variables, and step operations are isolated to that session
+
+#### Scenario: One session's breakpoint hit does not affect other session
+
+- **WHEN** two sessions are active
+- **AND** a breakpoint in session-A hits
+- **THEN** only session-A suspends; session-B continues running
+- **AND** VSCode's debug UI shows session-A's stopped event with session-A's stack/variables
+- **AND** session-B's call stack / threads remain in their last reported state
+
+#### Scenario: Multiple sessions broadcast index updates
+
+- **WHEN** user marks a new source dir while two sessions are active
+- **THEN** `IndexManager` rebuilds the in-memory index
+- **AND** `SessionManager.broadcastIndex` iterates both `SessionContextImpl` instances
+- **AND** each session's adapter receives the updated entries via `custom/syncSourceIndex`
+- **AND** subsequent `setBreakpoints` in either session resolves against the new index
+
+### Requirement: Per-Session Resource Ownership
+
+Every active Android debug session SHALL have a `SessionContextImpl` instance that is the sole owner of: the Java Adapter JVM `ChildProcess`, the session's `AdbDevice` (which holds the session's `activeForwards`), the DAP port, the JDWP port, and the `DapServerProxy`. There SHALL be no module-level singletons holding any of these. Resources SHALL be released in `SessionContextImpl.dispose()` exactly once.
+
+#### Scenario: Session owns its JVM child process
+
+- **WHEN** a session is constructed via `SessionContextImpl.create(session, device, process, options)`
+- **THEN** the JVM is spawned as the factory's last step and `SessionContextImpl.adapterProc` holds the `ChildProcess` reference
+- **AND** `dispose()` calls `adapterProc.kill()` exactly once (idempotent — calling `dispose` twice is a no-op)
+
+#### Scenario: Session owns its adb forward tracking
+
+- **WHEN** a session is constructed
+- **THEN** `SessionContextImpl.create` builds a fresh per-session `AdbDevice` (from `adb/AdbDevice.ts`) and calls `forwardJdwp(pid)` to install the forward
+- **AND** the `AdbDevice`'s `activeForwards` set records the port
+- **AND** `dispose()` calls `removeForward(jdwpPort)` which runs `adb forward --remove tcp:<port>`
+
+#### Scenario: Cross-session resource isolation
+
+- **WHEN** two sessions are active
+- **THEN** terminating session-A does NOT kill session-B's JVM
+- **AND** terminating session-A does NOT remove session-B's adb forward
+- **AND** session-B's DAP proxy remains functional and can still send custom requests to its own adapter
+
+### Requirement: Initial Index Delivered via Session Initializer
+
+The extension SHALL deliver the initial source index to a newly started debug session when `onDidStartDebugSession` fires: a session initializer (wired in `extension.ts` via `SessionManager.setSessionInitializer`) SHALL read the `IndexManager` snapshot and send it to that session via the `custom/syncSourceIndex` DAP custom request, followed by a fallback `custom/syncBreakpoints` push of the current breakpoint snapshot. The session configuration SHALL NOT carry an `fqnInfo` field; the Java Adapter's `handleAttach` `fqnInfo` parsing remains as a dormant compatibility path only.
+
+#### Scenario: Initial index pushed after session start
+
+- **WHEN** a new debug session starts and `onDidStartDebugSession` fires for an `android-java` session
+- **THEN** the initializer first rebuilds the index from the currently marked source dirs (`IndexManager.rebuildFromDirs(getAllDirs(), maxFiles)`) — activation alone never builds it, and the pre-refactor flow also built the index on every attach
+- **AND** reads `IndexManager.getAllEntries()`
+- **AND** sends `custom/syncSourceIndex` with the entries (only when the array is non-empty)
+- **AND** sends `custom/syncBreakpoints` with `BreakpointManager.getCurrentBreakpoints()` (re-resolving previously-deferred BPs against the now-populated index)
+- **AND** failures of either push are logged as warnings and do not break the session
+
+#### Scenario: Deferred setBreakpoints resolve with loaded index
+
+- **WHEN** VSCode sends `setBreakpoints` BEFORE the index push has been applied (BPs queued in `pendingJdiBps`)
+- **AND** `handleAttach` runs: connects JDI, creates `bpManager`, calls `drainPendingBps()`
+- **AND** the `custom/syncSourceIndex` push arrives, populating the adapter's `SourceIndex`
+- **THEN** each deferred BP is reprocessed against the now-populated index
+- **AND** FQNs resolve correctly and `verified: true` is reported for successfully-placed BPs
+
+#### Scenario: No temp file and no config fqnInfo
+
+- **WHEN** any debug session is constructed or terminated
+- **THEN** no file is written to or read from any temp directory by the extension
+- **AND** no `--index-file` CLI argument is passed to the Java Adapter JVM
+- **AND** the session configuration carries no `fqnInfo` field (the Kotlin `handleAttach` branch for it stays dormant)
+
+### Requirement: Per-Session AdbRunner Serial Targeting
+
+Every adb command issued by the extension on behalf of a debug session SHALL target that session's specific device serial via the `-s <serial>` argument. The `AdbRunner.exec()` and `AdbRunner.start()` APIs SHALL accept an optional `serial?: string` second parameter; when provided, the runner SHALL inject `-s <serial>` as the first argument to the spawned adb process.
+
+#### Scenario: Forward targeting specific serial
+
+- **WHEN** the session's per-instance `AdbDevice` installs the forward via `forwardJdwp(pid)`
+- **THEN** it calls `runner.exec(['forward', `tcp:${port}`, `jdwp:${pid}`], this.serial)`
+- **AND** the runner injects `-s <device.serial>` at the front: `adb -s <device.serial> forward tcp:<port> jdwp:<pid>`
+
+#### Scenario: listDevices remains global
+
+- **WHEN** `attach` command needs to enumerate devices (before a session exists)
+- **THEN** it uses `AdbDeviceFinder.findAll()` which calls `runner.exec(['devices'])` WITHOUT a serial parameter
+- **AND** the runner invokes plain `adb devices` (no `-s` injection)
+- **AND** the returned list is presented to the user for selection (auto-skipped when exactly one ready device exists)
+
+#### Scenario: Two sessions on different devices run concurrent adb commands
+
+- **WHEN** session-A on `emulator-5554` and session-B on `emulator-5556` are both active
+- **AND** session-A's SessionContextImpl calls `forwardJdwp`
+- **THEN** only `emulator-5554` receives the forward command
+- **AND** session-B's device is untouched

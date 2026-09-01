@@ -13,10 +13,25 @@ object Logging {
 
     // Force UTF-8 explicitly so Chinese log lines render correctly even on
     // Windows JVMs that default the console encoding to GBK.
-    private val errWriter: PrintWriter = PrintWriter(
+    //
+    // Defaults to stderr: in stdio mode stdout IS the DAP protocol channel,
+    // so logs must never touch it. TCP mode (--port=) owns no stdio channel,
+    // and Main calls useStdout() so logs stream on stdout — the extension
+    // then tags them "[adapter]" instead of the misleading "[adapter stderr]".
+    private var writer: PrintWriter = PrintWriter(
         OutputStreamWriter(System.err, StandardCharsets.UTF_8),
         true
     )
+
+    /**
+     * Route all subsequent log lines to stdout. Call once at startup,
+     * before the first log statement. Must stay @Synchronized with log()
+     * so a line never straddles the writer swap.
+     */
+    @Synchronized
+    fun useStdout() {
+        writer = PrintWriter(OutputStreamWriter(System.out, StandardCharsets.UTF_8), true)
+    }
 
     /**
      * Master switch for DEBUG-level output. DEBUG calls early-return when
@@ -75,7 +90,7 @@ object Logging {
                 append(t.stackTraceToString())
             }
         }
-        errWriter.println(line)
-        errWriter.flush()
+        writer.println(line)
+        writer.flush()
     }
 }

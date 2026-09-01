@@ -2,6 +2,7 @@
 import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as vscode from 'vscode';
 import { Logger } from './logger';
 import { t } from '../i18n/strings';
 
@@ -146,4 +147,20 @@ function runJavaVersion(javaPath: string): Promise<JdkInfo | null> {
 
 export function getJdkErrorMessage(): string {
   return t.jdkGetJdkErrorMessage();
+}
+
+/**
+ * Activation-time pre-flight: detect a JDK and warn (but not fail) when
+ * missing. Returns the detected JDK, or null — callers hand the null
+ * through to SessionManager, which re-detects lazily at attach time.
+ */
+export async function ensureJdkOrWarn(configuredPath: string): Promise<JdkInfo | null> {
+  const jdk = await detectJdk(configuredPath);
+  if (jdk) {
+    Logger.info(t.jdkDetected(jdk.javaPath, jdk.version));
+    return jdk;
+  }
+  Logger.warn(t.jdkMissingLong());
+  vscode.window.showWarningMessage(t.jdkWarning(), t.installJdk(), t.viewOutput());
+  return null;
 }

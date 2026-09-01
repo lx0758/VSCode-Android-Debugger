@@ -1,6 +1,6 @@
 // extension/src/ui/processPicker.ts
 import * as vscode from 'vscode';
-import { JdwpProcess } from '../adb/jdwp';
+import { JdwpProcess } from '../adb/AdbDevice';
 import { t } from '../i18n/strings';
 
 export interface ProcessPickResult {

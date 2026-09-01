@@ -113,5 +113,7 @@
   "No active Android Debugger session. Run \"Attach Debugger to Android Process\" first.": "No active Android Debugger session. Run \"Attach Debugger to Android Process\" first.",
   "Active Android Debugger session has no target PID recorded (started by an older extension version). Detach and re-attach to use Restart.": "Active Android Debugger session has no target PID recorded (started by an older extension version). Detach and re-attach to use Restart.",
   "Could not open the Android Debugger sidebar automatically. Click the \"Android Debugger\" icon in the Activity Bar (left side) to open it.": "Could not open the Android Debugger sidebar automatically. Click the \"Android Debugger\" icon in the Activity Bar (left side) to open it.",
-  "Mark a source folder now": "Mark a source folder now"
+  "Mark a source folder now": "Mark a source folder now",
+  "Select Android device": "Select Android device",
+  "Pick a device to attach": "Pick a device to attach"
 }

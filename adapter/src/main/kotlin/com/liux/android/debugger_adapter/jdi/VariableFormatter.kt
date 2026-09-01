@@ -31,7 +31,7 @@ class VariableFormatter {
                 result += VarEntry("this", formatted, ref, thisObj.referenceType().name())
             }
         } catch (e: AbsentInformationException) {
-            Logging.debug("无变量信息 (需 -g 编译)")
+            Logging.debug("[Vars] 无变量信息 (需 -g 编译)")
         }
         return result
     }

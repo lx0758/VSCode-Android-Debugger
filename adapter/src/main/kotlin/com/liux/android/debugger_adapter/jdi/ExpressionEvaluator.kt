@@ -53,7 +53,7 @@ class ExpressionEvaluator {
             val value = Evaluator(frame).eval(node)
             formatValue(value)
         } catch (t: Throwable) {
-            Logging.warn("表达式求值失败: $expr - ${t.message}")
+            Logging.warn("[Eval] 表达式求值失败: $expr - ${t.message}")
             "<error: ${t.javaClass.simpleName}: ${t.message ?: ""}>"
         }
     }

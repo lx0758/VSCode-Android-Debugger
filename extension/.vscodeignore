@@ -2,3 +2,7 @@ node_modules/
 .vscode-test/
 *.vsix
 .DS_Store
+src/
+**/*.map
+tsconfig.json
+package-lock.json

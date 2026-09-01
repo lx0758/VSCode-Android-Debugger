@@ -23,7 +23,7 @@ class StepController(private val vm: VirtualMachine) {
         req.setSuspendPolicy(StepRequest.SUSPEND_EVENT_THREAD)
         req.enable()
         activeRequest = req
-        Logging.info("Step request: thread=${thread.name()} depth=$depth")
+        Logging.info("[Step] Step request: thread=${thread.name()} depth=$depth")
         vm.resume()
     }
 

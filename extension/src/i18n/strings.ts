@@ -1,4 +1,4 @@
-import { l10n, Uri } from 'vscode';
+import { l10n } from 'vscode';
 
 export const t = {
   activating: () => l10n.t('Activating Android Debugger'),
@@ -68,10 +68,10 @@ export const t = {
   statusBarAttachingDefault: () => l10n.t('Attaching...'),
   statusBarAttachedDefault: () => l10n.t('Attached'),
   statusBarErrorDefault: () => l10n.t('Error'),
-  statusBarIndexerFast: () => l10n.t('$(zap) Remote indexer: fast'),
-  statusBarIndexerFastTooltip: () => l10n.t('Index built by the remote extension (native FS read)'),
-  statusBarIndexerFallback: () => l10n.t('$(zap) Remote indexer: fallback'),
-  statusBarIndexerFallbackTooltip: () => l10n.t('Remote indexer unavailable — indexing files via cross-host reads (slower)'),
+  statusBarIndexerFast: () => l10n.t('$(zap) Source indexer: local FS'),
+  statusBarIndexerFastTooltip: () => l10n.t('Indexing local workspace files natively'),
+  statusBarIndexerFallback: () => l10n.t('$(zap) Source indexer: remote proxy'),
+  statusBarIndexerFallbackTooltip: () => l10n.t('Remote window — indexing goes through the remote FS proxy (works, slower)'),
 
   pickTargetDirTitle: () => l10n.t('Select target folder'),
   pickTargetDirOptionFile: () => l10n.t('Directory of current file'),
@@ -80,6 +80,9 @@ export const t = {
 
   processPickerTitle: () => l10n.t('Choose Android process to attach'),
   processPickerPlaceholder: () => l10n.t('Search by process name...'),
+
+  pickDeviceTitle: () => l10n.t('Select Android device'),
+  pickDevicePlaceholder: () => l10n.t('Pick a device to attach'),
 
   noDevices: () => l10n.t('No Android device detected. Please verify adb is connected (adb devices).'),
   devicesNotReady: (serialStates: string) => l10n.t('Devices not ready: {0}', serialStates),
@@ -92,9 +95,6 @@ export const t = {
   attachLaunchingAdapter: () => l10n.t('Launching Java adapter...'),
   attachDapInitializing: () => l10n.t('DAP initializing...'),
   attachAttach: () => l10n.t('attach...'),
-  attachBuildingIndex: () => l10n.t('Building SourceIndex...'),
-  attachIndexerRemote: () => l10n.t('Indexing via remote extension...'),
-  attachIndexerFallback: () => l10n.t('Remote indexer unavailable, indexing locally (slower)...'),
   attachLargeIndexTitle: (n: number) => l10n.t('Source dir contains ~{0} files', n),
   attachLargeIndexMessage: (n: number, secs: number) => l10n.t('Indexing ~{0} files will take ~{1}s. Continue?', n, secs),
   attachLargeIndexContinue: () => l10n.t('Continue'),
@@ -132,10 +132,6 @@ export const t = {
   logAdapterExited: (code: number | null, signal: string | null) => l10n.t('Java adapter exited: code={0} signal={1}', String(code), String(signal)),
   logAdapterSpawnFail: () => l10n.t('Java adapter failed to spawn'),
   logAdapterJarFound: (path: string) => l10n.t('Found adapter jar: {0}', path),
-  logIndexerRemote: () => l10n.t('Building SourceIndex via remote extension (native FS read)'),
-  logIndexerFallback: () => l10n.t('Remote extension unavailable, building SourceIndex via cross-host reads'),
-  logReindexAfterConfigChange: () => l10n.t('sourceDirs config changed mid-session, re-indexing'),
-  logAutoIncludeFile: (path: string) => l10n.t('Auto-included file via breakpoint: {0}', path),
   errAdapterJarMissing: (candidates: string) => l10n.t("Java adapter jar not found. Please run 'npm run build:adapter' from the repo root to build the artifact. Probed:\n{0}", candidates),
   errAdapterNotReadyTimeout: (ms: number) => l10n.t('Java adapter did not become ready within {0} ms', ms),
   errAdapterExitBeforeReady: (code: number | null, signal: string | null) =>
@@ -157,7 +153,3 @@ export const t = {
     'Active Android Debugger session has no target PID recorded (started by an older extension version). Detach and re-attach to use Restart.'
   ),
 };
-
-export function formatRelative(uri: Uri): string {
-  return l10n.t('{0}', uri.fsPath);
-}
