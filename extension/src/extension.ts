@@ -46,11 +46,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<unknow
   );
   Logger.info(`=========================================`);
 
-  console.log(
-    `[ADB Dispatcher] sessionId=${vscode.env.sessionId} ` +
-      `remoteName="${vscode.env.remoteName || '<none>'}"`
-  );
-
   try {
     await activateUI(context);
     Logger.info(`[${tag}] UI side activated OK`);

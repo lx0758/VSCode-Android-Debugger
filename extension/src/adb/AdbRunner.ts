@@ -79,6 +79,9 @@ export class DefaultAdbRunner implements AdbRunner {
         Logger.debug(`[adb] stderr: ${s.trimEnd()}`);
       });
       if (stdin) {
+        proc.stdin.on('error', (err) => {
+          Logger.debug(`[adb] stdin write failed: ${err.message}`);
+        });
         proc.stdin.write(stdin);
         proc.stdin.end();
       }

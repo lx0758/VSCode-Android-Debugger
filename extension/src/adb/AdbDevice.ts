@@ -86,26 +86,32 @@ export class AdbDevice {
       Logger.info(`[AdbDevice] spawning "adb jdwp" on ${this.serial} (kill after ${captureMs}ms capture)`);
       const proc: ChildProcess = this.runner.start(['jdwp'], this.serial);
       let stdout = '';
-      proc.stdout!.on('data', (d) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        Logger.info(`[AdbDevice] killing "adb jdwp" after ${captureMs}ms capture window`);
+        killQuietly(proc);
+      }, captureMs);
+      const cleanup = (): void => {
+        clearTimeout(timer);
+        killQuietly(proc);
+      };
+      proc.stdout?.on('data', (d) => {
         stdout += d.toString();
       });
-      proc.stderr!.on('data', (d) => {
+      proc.stderr?.on('data', (d) => {
         Logger.warn(`[AdbDevice] "adb jdwp" stderr: ${d.toString().trimEnd()}`);
       });
       proc.on('error', (err) => {
+        if (settled) return;
+        settled = true;
         Logger.error(`[AdbDevice] "adb jdwp" spawn error: ${err.message}`);
+        cleanup();
         reject(err);
       });
-      const timer = setTimeout(() => {
-        Logger.info(`[AdbDevice] killing "adb jdwp" after ${captureMs}ms capture window`);
-        try {
-          proc.kill('SIGKILL');
-        } catch {
-          // already dead
-        }
-      }, captureMs);
       proc.on('exit', () => {
-        clearTimeout(timer);
+        if (settled) return;
+        settled = true;
+        cleanup();
         const pids = stdout
           .split('\n')
           .map((l) => l.trim())
@@ -137,5 +143,13 @@ export class AdbDevice {
       }
     }
     return map;
+  }
+}
+
+function killQuietly(proc: ChildProcess): void {
+  try {
+    proc.kill('SIGKILL');
+  } catch {
+    // already dead
   }
 }
