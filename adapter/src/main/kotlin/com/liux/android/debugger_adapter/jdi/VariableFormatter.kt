@@ -12,6 +12,32 @@ import java.util.concurrent.atomic.AtomicInteger
 
 class VariableFormatter {
 
+    companion object {
+        /**
+         * Render a JDI Value into the human-readable string shown in DAP
+         * `evaluate` results and `setVariable` responses. Shared by the
+         * evaluate path (D30: expandable results) and the setVariable path
+         * so both surfaces render values identically.
+         */
+        fun formatValueForResponse(value: Value?): String {
+            if (value == null) return "null"
+            if (value is ArrayReference) {
+                return "${value.type().name()}[${value.length()}]"
+            }
+            if (value is ObjectReference) {
+                var str = value.toString()
+                if (str.startsWith("instance of ")) str = str.substring("instance of ".length)
+                val brace = str.indexOf('(')
+                val braceEnd = str.lastIndexOf(')')
+                if (brace > 0 && braceEnd > brace && str.substring(brace + 1, braceEnd).startsWith("id=")) {
+                    str = str.substring(0, brace)
+                }
+                return str
+            }
+            return value.toString()
+        }
+    }
+
     private val varRefSeq = AtomicInteger(1000)
     private val expandableRefs = HashMap<Int, Value>()
 

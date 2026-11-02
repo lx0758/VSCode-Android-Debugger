@@ -9,10 +9,15 @@ import { FqnEntry, IndexTooLargeError, IndexOptions, Indexer } from './Indexer';
 const JAVA_PKG_RE = /^\s*package\s+([\w.]+)\s*;/m;
 const JAVA_CLASS_RE =
   /(?:public\s+|private\s+|protected\s+|static\s+|final\s+|abstract\s+|sealed\s+|non-sealed\s+)*\b(?:class|interface|enum|record|@interface)\s+([A-Za-z_$][\w$]*)/g;
+// Single-type and on-demand imports; static imports fold to their FQN.
+const JAVA_IMPORT_RE = /^\s*import\s+(?:static\s+)?([\w.*]+)\s*;/gm;
 
 const KT_PKG_RE = /^\s*package\s+([\w.]+)/m;
 const KT_CLASS_RE =
   /(?:public\s+|private\s+|protected\s+|internal\s+|abstract\s+|final\s+|sealed\s+|open\s+|data\s+|inner\s+|enum\s+|annotation\s+)*\b(?:class|object|interface)\s+([A-Za-z_$][\w$]*)/g;
+// `import x.y.Z` and `import x.y.*`; `as Alias` renames are folded away —
+// the alias is dropped and the aliased FQN form is kept.
+const KT_IMPORT_RE = /^\s*import\s+([\w.*]+)(?:\s+as\s+\w+)?\s*$/gm;
 
 const BATCH_SIZE = 50;
 const PROGRESS_INTERVAL_MS = 1000;
@@ -92,7 +97,22 @@ async function findSourceFilesViaFs(dirUri: vscode.Uri): Promise<vscode.Uri[]> {
   return results;
 }
 
-export function parseJavaFile(content: string, fileUri: vscode.Uri): string[] {
+export interface ParsedSourceFile {
+  fqns: string[];
+  imports: string[];
+}
+
+function extractImports(content: string, re: RegExp): string[] {
+  const imports: string[] = [];
+  re.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(content)) !== null) {
+    if (m[1] && !imports.includes(m[1])) imports.push(m[1]);
+  }
+  return imports;
+}
+
+export function parseJavaFile(content: string, fileUri: vscode.Uri): ParsedSourceFile {
   const pkgMatch = content.match(JAVA_PKG_RE);
   const packageName = pkgMatch ? pkgMatch[1] : '';
   const fqns: string[] = [];
@@ -108,10 +128,10 @@ export function parseJavaFile(content: string, fileUri: vscode.Uri): string[] {
   if (fqns.length === 0) {
     Logger.debug(`[indexer] no java declarations in ${displayPath(fileUri)}`);
   }
-  return fqns;
+  return { fqns, imports: extractImports(content, JAVA_IMPORT_RE) };
 }
 
-export function parseKotlinFile(content: string, fileUri: vscode.Uri): string[] {
+export function parseKotlinFile(content: string, fileUri: vscode.Uri): ParsedSourceFile {
   const pkgMatch = content.match(KT_PKG_RE);
   const packageName = pkgMatch ? pkgMatch[1] : '';
   const fqns: string[] = [];
@@ -127,22 +147,28 @@ export function parseKotlinFile(content: string, fileUri: vscode.Uri): string[] 
   if (fqns.length === 0) {
     Logger.debug(`[indexer] no kotlin declarations in ${displayPath(fileUri)}`);
   }
-  return fqns;
+  return { fqns, imports: extractImports(content, KT_IMPORT_RE) };
 }
 
 async function readAndParse(uri: vscode.Uri): Promise<FqnEntry[]> {
   try {
     const bytes = await vscode.workspace.fs.readFile(uri);
     const text = new TextDecoder('utf-8').decode(bytes);
-    const fqns = uri.path.endsWith('.kt')
+    const parsed = uri.path.endsWith('.kt')
       ? parseKotlinFile(text, uri)
       : parseJavaFile(text, uri);
+    if (parsed.imports.length > 0) {
+      Logger.debug(
+        `[indexer] FileEntry: ${displayPath(uri)} imports=[${parsed.imports.join(', ')}]`
+      );
+    }
     // Canonical key: fsPath for file: URIs, uri.path for vscode-remote etc.
     // sourceUri: the form VSCode resolves when the adapter echoes it back.
-    return fqns.map((fqn) => ({
+    return parsed.fqns.map((fqn) => ({
       fqn,
       file: canonicalPath(uri),
       ...(uri.scheme === 'file' ? {} : { sourceUri: uri.toString() }),
+      ...(parsed.imports.length > 0 ? { imports: parsed.imports } : {}),
     }));
   } catch (e) {
     Logger.warn(

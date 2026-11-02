@@ -1,8 +1,8 @@
-package com.liux.android.debugger_adapter.parser
+package com.liux.android.debugger_adapter.eval.kotlin
 
 /**
  * Token types produced by the [Lexer]. The parser consumes a flat list of
- * these and produces an [ExprNode] tree.
+ * these and produces an [com.liux.android.debugger_adapter.eval.common.ExprNode] tree.
  */
 internal sealed class Token {
     data class Ident(val name: String) : Token()
@@ -28,6 +28,11 @@ internal sealed class Token {
 
     /** All multi-character operators, kept as their symbol for the parser to dispatch on. */
     data class Op(val symbol: String) : Token()
+
+    /** Kotlin null-safe access `?.`. */
+    object SafeCallOp : Token()
+    /** Kotlin null-safety assertion `!!`. */
+    object NotNullOp : Token()
 
     object KwNew : Token()
     object KwNull : Token()
@@ -67,14 +72,47 @@ internal class Lexer(private val src: String) {
                 c == ',' -> { tokens.add(Token.Comma); pos++ }
                 c == ';' -> { tokens.add(Token.Semi); pos++ }
                 c == '.' -> { tokens.add(Token.Dot); pos++ }
-                c == '?' -> { tokens.add(Token.Question); pos++ }
-                c == ':' -> { tokens.add(Token.Colon); pos++ }
+                c == '?' -> {
+                    // `?.` is the Kotlin safe-call, `?:` the elvis operator;
+                    // a bare `?` stays ternary.
+                    when {
+                        pos + 1 < src.length && src[pos + 1] == '.' -> {
+                            tokens.add(Token.SafeCallOp); pos += 2
+                        }
+                        pos + 1 < src.length && src[pos + 1] == ':' -> {
+                            tokens.add(Token.Op("?:")); pos += 2
+                        }
+                        else -> {
+                            tokens.add(Token.Question); pos++
+                        }
+                    }
+                }
+                c == ':' -> {
+                    // `::` is a callable reference — not supported by this
+                    // frontend. Reject it explicitly instead of letting the
+                    // parser see two stray colons and mis-read the rest.
+                    if (pos + 1 < src.length && src[pos + 1] == ':') {
+                        throw IllegalArgumentException("不支持可调用引用语法 '::' (位置 $pos)")
+                    }
+                    tokens.add(Token.Colon); pos++
+                }
                 c == '=' -> tokens.add(readEqualsOp())
                 c == '!' -> tokens.add(readNotOp())
                 c == '<' -> tokens.add(readLessOp())
                 c == '>' -> tokens.add(readGreaterOp())
                 c == '+' -> { tokens.add(Token.Op("+")); pos++ }
-                c == '-' -> { tokens.add(Token.Op("-")); pos++ }
+                c == '-' -> {
+                    // `->` is a lambda arrow — not supported by this
+                    // frontend. Reject it explicitly so the fallback path
+                    // can't silently mis-read `x -> y` as `x - > y`.
+                    // `a-->b` (decrement, then compare) stays readable.
+                    if (pos + 1 < src.length && src[pos + 1] == '>' &&
+                        !(pos >= 1 && src[pos - 1] == '-')
+                    ) {
+                        throw IllegalArgumentException("不支持 lambda 语法 '->' (位置 $pos)")
+                    }
+                    tokens.add(Token.Op("-")); pos++
+                }
                 c == '*' -> { tokens.add(Token.Op("*")); pos++ }
                 c == '/' -> tokens.add(readSlashOp())
                 c == '%' -> { tokens.add(Token.Op("%")); pos++ }
@@ -179,8 +217,11 @@ internal class Lexer(private val src: String) {
 
     private fun readNotOp(): Token {
         pos++
-        return if (pos < src.length && src[pos] == '=') { pos++; Token.Op("!=") }
-        else Token.Op("!")
+        return when {
+            pos < src.length && src[pos] == '!' -> { pos++; Token.NotNullOp } // Kotlin `!!`
+            pos < src.length && src[pos] == '=' -> { pos++; Token.Op("!=") }
+            else -> Token.Op("!")
+        }
     }
 
     private fun readLessOp(): Token {

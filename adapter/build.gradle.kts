@@ -13,6 +13,9 @@ repositories {
 
 dependencies {
     implementation("com.google.code.gson:gson:2.10.1")
+    // 3.23.0 is the last JDT Core release compatible with Java 8 (3.24+
+    // requires Java 11, 3.31+ requires 17). The adapter JVM target is 1.8.
+    implementation("org.eclipse.jdt:org.eclipse.jdt.core:3.23.0")
     testImplementation("junit:junit:4.13.2")
 }
 
@@ -41,14 +44,26 @@ tasks.named<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJ
     }
 }
 
+// The extension loads the adapter from `extension/resources/adapter.jar`, so
+// the freshly-built jar has to land there. The path is derived from the
+// adapter project's parent (the repo root) — `rootProject.projectDir` is the
+// repo root as well, but going through `projectDir` keeps this correct no
+// matter how the build is invoked (root or sub-project).
+val extensionResourcesDir = projectDir.parentFile.resolve("extension/resources")
+
 tasks.register("copyJarToExtension") {
     val jarFile = tasks.named("shadowJar").get().outputs.files.singleFile
-    val targetDir = rootProject.projectDir.parentFile.resolve("extension/resources")
-    outputs.dir(targetDir)
+    val target = extensionResourcesDir.resolve(jarFile.name)
+    // Track the jar itself as input and the copied file as output — a
+    // directory output would make Gradle consider the task up-to-date even
+    // when the jar inside it changed, leaving a stale adapter in the
+    // extension.
+    inputs.file(jarFile)
+    outputs.file(target)
     doLast {
-        targetDir.mkdirs()
-        jarFile.copyTo(targetDir.resolve(jarFile.name), overwrite = true)
-        println("Copied ${jarFile.name} → ${targetDir}")
+        target.parentFile.mkdirs()
+        jarFile.copyTo(target, overwrite = true)
+        println("Copied ${jarFile.name} → $target")
     }
 }
 

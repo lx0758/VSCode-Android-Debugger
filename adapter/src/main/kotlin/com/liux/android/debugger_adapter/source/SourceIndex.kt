@@ -13,6 +13,13 @@ data class FileEntry(
      * echoed to a Windows client renders as `\home\...` and never opens.
      */
     val uri: String? = null,
+    /**
+     * Import declarations extracted by the TS indexer at index time
+     * (single-type and on-demand, Kotlin aliases folded to their FQN).
+     * Consumed by expression short-name resolution; entries sharing the
+     * same file carry the same list.
+     */
+    val imports: List<String> = emptyList(),
 ) {
     val primaryFqn: String = fqns.first()
 

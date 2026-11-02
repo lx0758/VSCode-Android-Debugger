@@ -1133,3 +1133,75 @@ Remote-SSH 修复（路径模型 + workspace 侧实现清理，见 §5.1 / §5.5
 | D22 | Remote-SSH 索引方案 | 删除 workspace 侧实现 `remote/`（同 ID 双宿主 exports 不可达 + 只跑 UI 宿主）；**保留 IndexerFactory/RemoteIndexer 作双插件架构缝隙**（将来 `extensionKind:["workspace"]` helper 扩展原生跑索引，经跨宿主通道调用）；现行 LocalIndexer 统一走 `vscode.workspace.fs`/`findFiles`（透明代理远程 FS） | 复活同 ID 双宿主 exports 调用（不可实现） |
 | D23 | 路径模型 | 存储形态 = URI 字符串（Memento）；内部键 = canonical path（file: → fsPath，其余 → uri.path，adapter normalizeSourcePath 对齐）；util/uri.ts 单点实现 | 全程 fsPath（远程 URI 被毁成假路径）|
 | D24 | unmark 健壮性 | removeDir 无 contains 前置拦截、多形态宽容匹配——错误存储的路径也能解除 | unmark 前先 contains 检查（错误路径被挡死） |
+| D25 | 表达式执行路线 | **解释执行**：语法树 → JDI/JDWP 原语（InvokeMethod/GetField/NewInstance/GetValues）在暂停线程上逐节点执行，零注入。业界双实证（vscode-java-debug 的 Eclipse ASTEvaluationEngine、kotlin-lsp 的 eval4j 均为此路线） | 编译 snippet 注入目标进程——ART 的 JDWP 不支持向运行中进程定义新类，路线封死 |
+| D26 | 类型解析来源 | **运行时 JDI 反射**（`vm.classesByName` + `ReferenceType` 字段/方法/继承链遍历），无 classpath 自足——目标 VM 本身就是"活的类型库" | 编译期 JDT binding（需完整 classpath；本插件只有源码片段，无依赖 jar） |
+| D27 | 语言分流规则 | **栈帧源文件后缀决定表达式前端**：`.java` → JDT 前端，`.kt` → 自研前端。判定链：`location().sourceName()` → SourceIndex 回查 → `FooKt` 启发式 → 默认 Java（保守：Java 形态在任何字节码上可执行）。语言规则只决定**表达式语法**，不限定可引用的类型范围（字节码统一，跨语言引用天然合法） | 单一前端 |
+| D28 | JDT 引入范围 | 仅 `org.eclipse.jdt:org.eclipse.jdt.core`（ASTParser standalone 空环境模式，单依赖 EPL-2.0），**只作语法前端**：吃当前源文件文本，产出 AST + import 列表 + 同文件 IBinding。不引入 `org.eclipse.jdt.debug`（拖 Eclipse 运行时 + 强绑 IJavaProject 模型）；不引入 kotlin-lsp（闭源 + IntelliJ 平台绑定 + JetBrains 专有 license） | 整包 Eclipse 容器；复用 kotlin-lsp 组件 |
+| D29 | 统一 IR | 现有 `parser/ExprNode` 升格为两前端共享的中间表示：JDT 前端做 `Java AST → ExprNode` 翻译，自研 parser 本就产 ExprNode，运行时层单套实现服务双语言 | 各前端独立执行（能力重复实现、双倍维护） |
+| D30 | evaluate 结果呈现 | 求值结果为 ObjectReference 时注册 VariableFormatter 可展开引用，返回真实 `variablesReference`（Watch 内可继续展开，与变量面板体验一致） | 恒返回 0（现状，求值结果不可展开） |
+
+---
+
+## 十一、表达式求值架构（设计，2026-09）
+
+> 现状：`parser/`（Lexer/Parser/Evaluator 递归下降）在 JDI `StackFrame` 上手工求值，仅覆盖局部变量与基本运算；成员字段、静态成员、方法调用均不可用。本章记录重设计：对标 IDEA / vscode-java-debug 的表达式体验（Watch / REPL / hover / 条件断点 / 日志点共用一条求值管线），核心约束见 D25（ART 零注入）与 D26（无 classpath 自足）。
+
+### 11.1 调研结论（业界实证，均确认"解释执行"路线）
+
+| 实现 | 语义解析 | 中间表示 | 执行方式 |
+|---|---|---|---|
+| vscode-java-debug（microsoft/java-debug） | Eclipse JDT `ASTEvaluationEngine`（完整项目编译上下文） | 自定义 AST 指令序列 | 调试器侧解释器逐指令执行 → JDWP 原语 |
+| kotlin-lsp `intellij_debugger`（JetBrains） | Kotlin 编译器 K1/K2（code fragment） | JVM 字节码（eval4j 解释器） | 调试器侧字节码解释 → fork JDI/JDWP |
+
+共同点：**编译期语义 + 调试器侧解释执行 + JDWP 原语转发，均不向目标进程注入任何类**。其中编译期语义解析依赖 IDE 工程模型（`IJavaProject` / IntelliJ 分析内核），本插件不具备该前提——因此本设计把类型解析完全落在运行时（D26），编译期仅保留语法层（D28）。
+
+### 11.2 架构：双前端 + 统一 IR + 共享运行时层
+
+```mermaid
+flowchart TD
+    E["DAP evaluate(frameId, expression)"] --> D{"语言判定<br/>栈帧所在源文件"}
+    D -->|".java"| J["Java 前端 (JDT)<br/>ASTParser standalone 空环境<br/>输入: 当前源文件文本<br/>输出: AST / import 列表 / 同文件 IBinding"]
+    D -->|".kt"| K["Kotlin 前端 (自研)<br/>现有 Lexer/Parser<br/>+ 糖层: ?. / !! / 字符串模板"]
+    J --> IR["统一 IR: ExprNode<br/>(JDT AST → ExprNode 翻译器)"]
+    K --> IR
+    IR --> R["共享运行时层 RuntimeEvaluator<br/>名字解析: 短名→FQN<br/>(同文件类型→单类型 import→同包→java.lang→on-demand import)<br/>类型解析: vm.classesByName + JDI 反射<br/>重载匹配 / 继承链上溯 / synthetic 过滤"]
+    R --> P["JDI 原语执行<br/>invokeMethod / getField / newInstance / 数组"]
+    P --> T["目标 ART (suspended thread)"]
+```
+
+语言判定优先级（D27）：`location().sourceName()` 后缀 → `SourceIndex` 文件路径回查 → `FooKt` 启发式 → 默认 Java。
+
+### 11.3 语法 → JDI 原语映射表（运行时层职责清单）
+
+| Java 语法 | JDI/JDWP 原语 |
+|---|---|
+| 局部变量 | `frame.visibleVariables()` + `frame.getValue()`（已有） |
+| `this` | `frame.thisObject()` |
+| `a.b` / `this.b` 成员字段 | `ObjectReference.getValue(Field)`，沿 `superclass()` 上溯 |
+| `A.b` 静态字段 | `ReferenceType.getValue(Field)`，类经 `vm.classesByName` 解析 |
+| `a.m(args)` 实例方法 | `ObjectReference.invokeMethod(thread, m, args, INVOKE_SINGLE_THREADED)` |
+| `A.m(args)` 静态方法 | `ClassType.invokeMethod(...)` |
+| `new X(args)` | `ClassType.newInstance(...)` |
+| `a[i]` / `new int[n]` | `ArrayReference.getValue / getLength / newInstance` |
+| 算术/比较/逻辑运算 | 调试器侧 mirror 值计算（现有 Evaluator 逻辑） |
+| `(Foo) x` | 类型校验，无运行期动作（引用 cast） |
+| 求值异常 | `InvocationException` → 透出异常 `ObjectReference` 给用户 |
+
+需自补的 Java 语义小块：基本类型 widening + 装箱匹配规则、`isSynthetic()/isBridge()` 过滤、重载歧义显式报错（不猜）。
+
+### 11.4 模块划分（adapter/eval/）
+
+| 组件 | 职责 | 依赖 |
+|---|---|---|
+| `ExpressionEvaluator`（现有，改造） | 升格为**分发器**：语言判定（D27 链）+ 前端选择 + 保留 logpoint 模板插值入口 | — |
+| `eval/JavaFrontend` | ASTParser standalone 解析源文件 + 表达式 → `ExprNode`；import 提取 | org.eclipse.jdt.core |
+| `eval/KotlinFrontend` | 现有 parser + 糖层；`.kt` import 轻量扫描（`import x.y.Z as A`）；Kotlin 映射规则（`object Foo` → `Foo.INSTANCE`、`Companion`） | 无新增 |
+| `eval/NameResolver` | 短名 → FQN（双前端共用，import 候选集由前端提供） | 无 |
+| `eval/RuntimeEvaluator` | FQN → `ReferenceType`；成员/重载解析；JDI 原语执行；求值状态管理 | JDI |
+| `jdi/VariableFormatter` | 补 `registerExpandable` 对 evaluate 结果的复用（D30） | — |
+
+### 11.5 分阶段落地
+
+- **P1（无新依赖）**：`RuntimeEvaluator` + Kotlin 前端糖层 + evaluate 结果 `variablesReference` 接回变量面板；成员字段/静态成员/无参方法/数组先通。
+- **P2**：引入 `org.eclipse.jdt.core`，Java 前端（AST→ExprNode + import 短名解析），Java 栈帧全语法覆盖。
+- **P3（可选）**：用户可提供 classpath（android.jar + 依赖 jar）时的"精确模式"——ASTParser `setEnvironment` 启用 binding，处理运行时匹配不了的编译器语义（歧义重载、编译器特有规则）。

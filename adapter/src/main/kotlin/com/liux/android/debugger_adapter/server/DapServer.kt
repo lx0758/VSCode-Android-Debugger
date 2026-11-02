@@ -42,7 +42,7 @@ class DapServer(
 ) {
 
     private val indexer = SourceIndexer()
-    private val exprEvaluator = ExpressionEvaluator()
+    private val exprEvaluator = ExpressionEvaluator(indexer.index)
     private val varFormatter = VariableFormatter()
 
     private var jdi: JdiConnection? = null
@@ -204,14 +204,7 @@ class DapServer(
         // on the first drain pass.
         val fqnInfo = args.get("fqnInfo")?.asJsonArray
         if (fqnInfo != null && fqnInfo.size() > 0) {
-            val list = ArrayList<Map<String, String>>(fqnInfo.size())
-            for (el in fqnInfo) {
-                val obj = el.asJsonObject
-                list += mapOf(
-                    "fqn" to (obj.get("fqn")?.asString ?: ""),
-                    "file" to (obj.get("file")?.asString ?: ""),
-                )
-            }
+            val list = SourceIndexer.parseEntries(fqnInfo)
             indexer.add(list)
             Logging.info("[Server] handleAttach: 从 arguments.fqnInfo 加载 ${list.size} 条索引")
         }
@@ -338,17 +331,7 @@ class DapServer(
 
     private fun handleSyncSourceIndex(args: JsonObject): JsonObject {
         val entries = args.get("entries")?.asJsonArray ?: JsonArray()
-        val list = (0 until entries.size()).map { i ->
-            val obj = entries[i].asJsonObject
-            val m = mutableMapOf(
-                "fqn" to obj.get("fqn").asString,
-                "file" to obj.get("file").asString
-            )
-            // Optional: the form VSCode resolves when echoed back as DAP
-            // source.path (full vscode-remote:// URI for remote windows).
-            obj.get("sourceUri")?.takeUnless { it.isJsonNull }?.asString?.let { m["sourceUri"] = it }
-            m
-        }
+        val list = SourceIndexer.parseEntries(entries)
 
         // Compare file sets BEFORE replacing the index. Any file in oldFiles
         // but not in newFiles belonged to a source dir the user just removed
@@ -706,10 +689,14 @@ class DapServer(
         }
         val frameId = frameIdEl.asInt
         val frame = findFrame(frameId) ?: throw Exception("栈帧不存在: $frameId")
-        val result = exprEvaluator.evaluateExpression(expr, frame)
+        // D30: single evaluation pass returns the raw Value; when it is an
+        // expandable object/array we register it with the formatter so the
+        // Watch pane can expand the result, matching the variables pane.
+        val (value, display) = exprEvaluator.evaluateForResponse(expr, frame)
+        val ref = if (value != null && isExpandable(value)) varFormatter.registerExpandable(value) else 0
         return JsonObject().apply {
-            addProperty("result", result)
-            addProperty("variablesReference", 0)
+            addProperty("result", display)
+            addProperty("variablesReference", ref)
         }
     }
 
@@ -764,7 +751,7 @@ class DapServer(
             Logging.info("[Server] setVariable: 帧级变量 $name = $valueExpr")
             val newRef = if (newValue != null && isExpandable(newValue)) varFormatter.registerExpandable(newValue) else 0
             return JsonObject().apply {
-                addProperty("value", formatValueForResponse(newValue))
+                addProperty("value", VariableFormatter.formatValueForResponse(newValue))
                 addProperty("variablesReference", newRef)
                 addProperty("type", newValue?.type()?.name() ?: "null")
             }
@@ -799,7 +786,7 @@ class DapServer(
             Logging.info("[Server] setVariable: 字段 ${type.name()}.$name = $valueExpr")
             val newRef = if (newValue != null && isExpandable(newValue)) varFormatter.registerExpandable(newValue) else 0
             return JsonObject().apply {
-                addProperty("value", formatValueForResponse(newValue))
+                addProperty("value", VariableFormatter.formatValueForResponse(newValue))
                 addProperty("variablesReference", newRef)
                 addProperty("type", newValue?.type()?.name() ?: "null")
             }
@@ -824,24 +811,6 @@ class DapServer(
             return try { value.referenceType().visibleFields().isNotEmpty() } catch (_: Exception) { false }
         }
         return false
-    }
-
-    private fun formatValueForResponse(value: Value?): String {
-        if (value == null) return "null"
-        if (value is ArrayReference) {
-            return "${value.type().name()}[${value.length()}]"
-        }
-        if (value is ObjectReference) {
-            var str = value.toString()
-            if (str.startsWith("instance of ")) str = str.substring("instance of ".length)
-            val brace = str.indexOf('(')
-            val braceEnd = str.lastIndexOf(')')
-            if (brace > 0 && braceEnd > brace && str.substring(brace + 1, braceEnd).startsWith("id=")) {
-                str = str.substring(0, brace)
-            }
-            return str
-        }
-        return value.toString()
     }
 
     /**

@@ -14,6 +14,13 @@ export interface FqnEntry {
    * omitted for file: URIs (the canonical key already IS the local path).
    */
   sourceUri?: string;
+  /**
+   * Import declarations extracted at index time (single-type and on-demand,
+   * Kotlin `as` aliases folded to their FQN). Consumed by the adapter for
+   * expression short-name resolution — the adapter has no filesystem
+   * access, so the import candidate set must ride along with the index.
+   */
+  imports?: string[];
 }
 
 export interface SourceEntry {

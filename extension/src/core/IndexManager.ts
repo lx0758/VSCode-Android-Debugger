@@ -73,14 +73,15 @@ export class IndexManager {
       try {
         const bytes = await vscode.workspace.fs.readFile(uri);
         const text = new TextDecoder('utf-8').decode(bytes);
-        const fqns = uri.path.endsWith('.kt')
+        const parsed = uri.path.endsWith('.kt')
           ? parseKotlinFile(text, uri)
           : parseJavaFile(text, uri);
-        for (const fqn of fqns) {
+        for (const fqn of parsed.fqns) {
           out.push({
             fqn,
             file: canonicalPath(uri),
             ...(uri.scheme === 'file' ? {} : { sourceUri: uri.toString() }),
+            ...(parsed.imports.length > 0 ? { imports: parsed.imports } : {}),
           });
         }
       } catch (e) {

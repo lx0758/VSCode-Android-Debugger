@@ -1,10 +1,11 @@
 package com.liux.android.debugger_adapter.jdi
 
-import com.liux.android.debugger_adapter.parser.Evaluator
-import com.liux.android.debugger_adapter.parser.ExprNode
-import com.liux.android.debugger_adapter.parser.Lexer
-import com.liux.android.debugger_adapter.parser.Parser
+import com.liux.android.debugger_adapter.eval.FrontendSelector
+import com.liux.android.debugger_adapter.eval.LanguageDetector
+import com.liux.android.debugger_adapter.eval.RuntimeEvaluator
+import com.liux.android.debugger_adapter.eval.common.ExprNode
 import com.liux.android.debugger_adapter.protocol.Logging
+import com.liux.android.debugger_adapter.source.SourceIndex
 import com.sun.jdi.ObjectReference
 import com.sun.jdi.StackFrame
 import com.sun.jdi.Value
@@ -12,12 +13,19 @@ import com.sun.jdi.Value
 /**
  * Public entry point for expression evaluation used by the adapter.
  *
- * Delegates the heavy lifting to the recursive-descent parser in
- * `com.liux.android.debugger_adapter.parser`. This file only keeps the two helpers
- * the rest of the adapter calls: [evaluate] for log-message interpolation
- * and [evaluateExpression] / [resolveExpression] for direct evaluation.
+ * Acts as the language dispatcher (D2/D6): the expression is routed to
+ * the frontend that can actually parse it — JDT for Java
+ * (`com.liux.android.debugger_adapter.eval.JavaFrontend`), the
+ * recursive-descent parser for Kotlin — see [FrontendSelector]. The
+ * parsed [ExprNode] IR is handed to [RuntimeEvaluator]. This file keeps
+ * the helpers the rest of the adapter calls: [evaluate] for log-message
+ * interpolation and [evaluateExpression] / [resolveExpression] for direct
+ * evaluation.
  */
-class ExpressionEvaluator {
+class ExpressionEvaluator(
+    /** Adapter-side source index; drives language detection and name resolution. */
+    private val sourceIndex: SourceIndex,
+) {
 
     /**
      * Evaluates a log-message template containing `{expr}` placeholders.
@@ -49,8 +57,7 @@ class ExpressionEvaluator {
         return try {
             val cleaned = expr.trim().trimEnd(';').trim()
             if (cleaned.isEmpty()) return ""
-            val node = Parser(Lexer(cleaned).tokenize()).parse()
-            val value = Evaluator(frame).eval(node)
+            val value = RuntimeEvaluator(frame, sourceIndex = sourceIndex).eval(parse(cleaned, frame))
             formatValue(value)
         } catch (t: Throwable) {
             Logging.warn("[Eval] 表达式求值失败: $expr - ${t.message}")
@@ -65,8 +72,40 @@ class ExpressionEvaluator {
     fun resolveExpression(expr: String, frame: StackFrame): Value? {
         val cleaned = expr.trim().trimEnd(';').trim()
         if (cleaned.isEmpty()) return null
-        val node = Parser(Lexer(cleaned).tokenize()).parse()
-        return Evaluator(frame).eval(node)
+        return RuntimeEvaluator(frame, sourceIndex = sourceIndex).eval(parse(cleaned, frame))
+    }
+
+    /**
+     * Single evaluation pass for the DAP `evaluate` handler: returns both
+     * the raw JDI [Value] (for `variablesReference` registration, D30) and
+     * its display string. Errors are reported inline as `<error: ...>` —
+     * same presentation as [evaluateExpression] — so Watch/REPL surface
+     * failures without a DAP error response. The expression is evaluated
+     * exactly once (side-effecting expressions must not run twice).
+     */
+    fun evaluateForResponse(expr: String, frame: StackFrame): Pair<Value?, String> {
+        return try {
+            val value = resolveExpression(expr, frame)
+            value to (value?.let { formatValue(it) } ?: "null")
+        } catch (t: Throwable) {
+            Logging.warn("[Eval] 表达式求值失败: $expr - ${t.message}")
+            null to "<error: ${t.javaClass.simpleName}: ${t.message ?: ""}>"
+        }
+    }
+
+    /**
+     * Frontend dispatch: pick the frontend that can parse the expression
+     * and parse it into the shared IR.
+     *
+     * The choice is driven by the syntax of the expression (Kotlin-only
+     * shapes go to the Kotlin parser, everything else to JDT), not by the
+     * language of the frame — see [FrontendSelector]. The frame's language
+     * is still consulted for one thing: a `$name` inside a string literal
+     * is a Kotlin template only in a Kotlin file.
+     */
+    private fun parse(expr: String, frame: StackFrame): ExprNode {
+        val language = LanguageDetector.detectLanguage(frame, sourceIndex)
+        return FrontendSelector.parse(expr, language)
     }
 
     /**
