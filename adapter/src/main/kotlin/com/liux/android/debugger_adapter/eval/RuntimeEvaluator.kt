@@ -86,7 +86,7 @@ internal class RuntimeEvaluator(
         is ExprNode.Elvis -> evalElvis(node)
         is ExprNode.ArrayAllocation -> evalArrayAllocation(node)
         is ExprNode.ClassLiteral -> evalClassLiteral(node)
-        is ExprNode.ArrayInitializer -> evalArrayInitializer(node)
+        is ExprNode.ArrayInitializer -> evalArrayInitializer()
         is ExprNode.SafeCall -> evalSafeCall(node)
         is ExprNode.NotNull -> evalNotNull(node)
         is ExprNode.StringTemplate -> evalStringTemplate(node)
@@ -822,7 +822,14 @@ internal class RuntimeEvaluator(
         return type.classObject()
     }
 
-    private fun evalArrayInitializer(node: ExprNode.ArrayInitializer): Value =
+    /**
+     * A bare array initializer (`{ e1, e2 }`) has no element type of its
+     * own — it is only meaningful as the tail of `new T[]{ ... }`, which
+     * [evalArrayAllocation] handles via `ExprNode.ArrayAllocation.initializer`.
+     * Reaching this node standalone means the frontend produced an
+     * initializer outside of an allocation, which cannot be evaluated.
+     */
+    private fun evalArrayInitializer(): Value =
         throw IllegalArgumentException("数组初始化器必须配合 new T[]{...} 使用")
 
     private fun evalSafeCall(node: ExprNode.SafeCall): Value? {

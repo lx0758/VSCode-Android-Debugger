@@ -13,9 +13,11 @@ import com.sun.jdi.event.ClassPrepareEvent
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
-import org.junit.Assume.assumeNoException
+import org.junit.Assume.assumeTrue
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import java.net.ServerSocket
 
 /**
@@ -41,7 +43,28 @@ class JavaEvaluationEndToEndTest {
     private var vm: VirtualMachine? = null
     private var evaluator: RuntimeEvaluator? = null
 
+    /**
+     * The child JVM's stdout/stderr is redirected into this folder.
+     *
+     * It must be a JUnit-managed temporary folder: a hard-coded path
+     * (e.g. `/tmp/...`) only exists on the machine that wrote it, and
+     * `ProcessBuilder.redirectOutput` fails with `FileNotFoundException`
+     * when the parent directory is missing — which broke every test in
+     * this class on CI.
+     */
+    @Rule
+    @JvmField
+    val tempFolder: TemporaryFolder = TemporaryFolder()
+
     @Before fun attachAndBreak() {
+        // A JVM without the `jdk.jdi` module cannot host JDWP at all —
+        // skip instead of failing. Probed up front (rather than by
+        // catching `NoClassDefFoundError` around the whole body, which
+        // would also swallow a genuine missing-class regression).
+        assumeTrue(
+            "当前 JRE 不包含 com.sun.jdi, 跳过端到端求值测试",
+            hasJdi(),
+        )
         try {
             val port = freePort()
             process = ProcessBuilder(
@@ -50,7 +73,7 @@ class JavaEvaluationEndToEndTest {
                 "-cp", System.getProperty("java.class.path"),
                 "com.liux.android.debugger_adapter.eval.EvalTarget",
             ).redirectErrorStream(true)
-                .redirectOutput(java.io.File("/tmp/opencode/eval-target.log"))
+                .redirectOutput(tempFolder.newFile("eval-target.log"))
                 .start()
 
             // `attachingConnector()` / `arguments()` were removed in newer
@@ -96,9 +119,19 @@ class JavaEvaluationEndToEndTest {
             checkNotNull(frame) { "断点未在超时前命中" }
             evaluator = RuntimeEvaluator(frame)
         } catch (e: Throwable) {
-            // No JDWP in this environment (e.g. a stripped JRE) — skip.
+            // Every failure here is a real defect — the environment was
+            // already probed for JDWP support above. Masking them would
+            // turn a broken test silently green.
             throw e
         }
+    }
+
+    /** Whether this JVM ships the JDI implementation. */
+    private fun hasJdi(): Boolean = try {
+        Class.forName("com.sun.jdi.Bootstrap")
+        true
+    } catch (_: Throwable) {
+        false
     }
 
     @After fun detach() {

@@ -94,7 +94,7 @@ internal class NameResolver(
     fun resolveReferenceType(shortName: String): ReferenceType? {
         val fqn = resolveFqn(shortName) ?: return null
         val vm = frameOrNull?.virtualMachine() ?: return null
-        return vm.classesByName(fqn).firstOrNull() as? ReferenceType
+        return vm.classesByName(fqn).firstOrNull()
     }
 
     /** Resolve to the loaded [ClassType]; null when unresolved or no VM attached. */
