@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '20'
+  JAVA_VERSION: '21'
+
+jobs:
+  build:
+    name: 构建与测试
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: 安装 Node ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+
+      - name: 缓存 Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('adapter/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      - name: 安装扩展依赖
+        run: npm ci --no-audit --no-fund
+        working-directory: extension
+
+      - name: Adapter 单元测试
+        run: ./gradlew --console=plain test
+        working-directory: adapter
+
+      - name: 构建 adapter jar 与扩展
+        run: npm run build
+
+      - name: 校验 adapter jar 已就位
+        run: |
+          test -f extension/resources/adapter.jar || { echo "缺少 extension/resources/adapter.jar"; exit 1; }
+          ls -lh extension/resources/adapter.jar
+
+      - name: TypeScript 类型检查
+        run: npx tsc --noEmit -p .
+        working-directory: extension

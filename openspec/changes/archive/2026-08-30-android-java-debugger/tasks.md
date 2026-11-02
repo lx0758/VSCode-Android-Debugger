@@ -15,12 +15,12 @@
 - [x] 2.4 Implement `adb forward tcp:<port> jdwp:<pid>`: invoke, track created forwards for cleanup
 - [x] 2.5 Implement `adb forward --remove tcp:<port>`: cleanup helper
 - [x] 2.6 ~~Implement port allocation helper: pick free port from configured range (default `8000-8100`)~~ **SUPERSEDED by Section 14c** — Uses `net.createServer().listen(0)` for OS-assigned ephemeral ports instead of a fixed range. Keep no code from this task; remove the fixed-range port allocator if present.
-- [x] 2.7 Implement adb path auto-detection: probe common paths then `PATH`; respect user setting `debugger-for-android.adbPath`
+- [x] 2.7 Implement adb path auto-detection: probe common paths then `PATH`; respect user setting `vscode-android-debugger.adbPath`
 - [x] 2.8 Implement `AdbRunner` interface that returns Promises (or async iterators for streaming)
 
 ## 3. TS Side: Command Registration and Process Picker UI
 
-- [x] 3.1 Register command `debugger-for-android.attach` (label: "Debugger with Android")
+- [x] 3.1 Register command `vscode-android-debugger.attach` (label: "Debugger with Android")
 - [x] 3.2 Implement `runAttachCommand`: orchestrate adb → process list → QuickPick → adb forward → spawn adapter
 - [x] 3.3 Implement QuickPick UI: list PIDs with optional metadata (process name if obtainable), search/filter input
 - [x] 3.4 Wire up: on process selection, run adb forward, then proceed to adapter spawn
@@ -57,12 +57,12 @@
 
 ## 7. TS Side: Source Dirs Management
 
-- [x] 7.1 Register command `debugger-for-android.markSourceDir` (label: "Mark as Debug Source Folder")
-- [x] 7.2 Implement `SourceDirsManager` backed by `ExtensionContext.workspaceState` (Memento) with key `debugger-for-android.sourceDirs`. `addDir` appends the absolute path; `removeDir` filters; `getAllDirs` returns the array.
+- [x] 7.1 Register command `vscode-android-debugger.markSourceDir` (label: "Mark as Debug Source Folder")
+- [x] 7.2 Implement `SourceDirsManager` backed by `ExtensionContext.workspaceState` (Memento) with key `vscode-android-debugger.sourceDirs`. `addDir` appends the absolute path; `removeDir` filters; `getAllDirs` returns the array.
 - [x] 7.3 Implement: send configured source dirs to adapter on session start
 - [x] 7.4 Implement: on breakpoint set in unindexed file, send single-file path to adapter for auto-include
 - [x] 7.5 ~~Handle `ConfigurationTarget.Workspace` vs `WorkspaceFolder` correctly based on whether user opened single folder or workspace~~ **SUPERSEDED by Memento storage** — Memento is workspace-scoped automatically; no per-mode target selection or path-format normalization needed.
-- [ ] 7.6 First-run migration: in `SourceDirsManager` constructor (or on first `getAllDirs()`), if Memento is empty AND legacy `debugger-for-android.sourceDirs` exists in any `.vscode/settings.json` (per folder) or in the workspace's `ConfigurationTarget.Workspace` config, resolve relative paths to absolute, deduplicate, write to Memento, log how many were migrated. Idempotent.
+- [ ] 7.6 First-run migration: in `SourceDirsManager` constructor (or on first `getAllDirs()`), if Memento is empty AND legacy `vscode-android-debugger.sourceDirs` exists in any `.vscode/settings.json` (per folder) or in the workspace's `ConfigurationTarget.Workspace` config, resolve relative paths to absolute, deduplicate, write to Memento, log how many were migrated. Idempotent.
 
 ## 8. Kotlin Adapter: Breakpoint Resolution
 
@@ -128,7 +128,7 @@
 
 - [x] 14.1 Set `extensionKind: ["ui", "workspace"]` in `extension/package.json` so the extension loads on both local and remote VSCode hosts in a `ssh-remote` workspace.
 - [x] 14.2 In `extension/src/extension.ts`, detect side via `vscode.env.remoteName`: undefined → "local side" (UI + adb + Java Adapter); defined → "remote side" (only exposes `buildIndex`). Only the active side's logic runs; the other side is a no-op stub.
-- [x] 14.3 Create `extension/src/extension.local.ts` — local-side activation: registers `debugger-for-android.attach` command, status bar, QuickPick, `sourceDirs` TreeView. Coordinates index build via remote ext (or local fallback).
+- [x] 14.3 Create `extension/src/extension.local.ts` — local-side activation: registers `vscode-android-debugger.attach` command, status bar, QuickPick, `sourceDirs` TreeView. Coordinates index build via remote ext (or local fallback).
 - [x] 14.4 Create `extension/src/extension.remote.ts` — remote-side activation: returns `{ buildIndex(sourceDirs) }` from `activate()`. Registers no commands, no UI.
 - [x] 14.5 Wire `extension.ts` to load the right side based on `remoteName`:
   ```typescript
@@ -314,10 +314,10 @@ Atomic session teardown on every terminate (kill JVM + remove forward), custom r
   - Construct a new `AdbJdwpController` and register it.
   - Call `attachToProcess({...pick: { pid, name: 'pid <pid>' }, ...})`.
 - [x] 19.19 Stamp `__adapterPort`, `__jdwpPort`, `__pid` into the `DebugConfiguration` passed to `vscode.debug.startDebugging`. Without `__pid` the restart command cannot find the target.
-- [x] 19.20 In `extension/package.json` `contributes.commands`, register `debugger-for-android.restartSession` with title `%commands.restartSession.title%` and icon `$(debug-restart)`.
+- [x] 19.20 In `extension/package.json` `contributes.commands`, register `vscode-android-debugger.restartSession` with title `%commands.restartSession.title%` and icon `$(debug-restart)`.
 - [x] 19.21 In `extension/package.json` `contributes.menus.commandPalette`, add an entry for the restart command with `when: "debugType == 'android-java'"` so it only appears when an Android session is active.
 - [x] 19.22 In `extension/package.nls.json` and `extension/package.nls.en.json`, add `commands.restartSession.title` translation.
-- [x] 19.23 In `extension/src/extension.local.ts`, register the command: `vscode.commands.registerCommand('debugger-for-android.restartSession', () => runRestartSessionCommand(statusBar, {...}))`.
+- [x] 19.23 In `extension/src/extension.local.ts`, register the command: `vscode.commands.registerCommand('vscode-android-debugger.restartSession', () => runRestartSessionCommand(statusBar, {...}))`.
 - [x] 19.24 In `extension/src/extension.local.ts#onDidStartDebugSession`, add a code comment explaining why `factory.clearPort()` is NOT called here (the JVM outlives the session and should be reused for restart).
 
 ### 19f. Verification
@@ -334,7 +334,7 @@ User-configurable `adbPath` and `javaPath` with strict semantics (configured-but
 ### 20a. Config keys
 
 - [x] 20.1 In `extension/src/util/config.ts`, add `javaPath: string` to `ExtensionConfig` and `cfg.get<string>('javaPath', 'auto')`.
-- [x] 20.2 In `extension/package.json` `contributes.configuration.properties`, declare `debugger-for-android.javaPath` with `default: "auto"` and description `%config.javaPath.description%`.
+- [x] 20.2 In `extension/package.json` `contributes.configuration.properties`, declare `vscode-android-debugger.javaPath` with `default: "auto"` and description `%config.javaPath.description%`.
 - [x] 20.3 In `extension/package.nls.json` and `extension/package.nls.en.json`, add `config.javaPath.description` translation.
 
 ### 20b. adb resolution ladder
@@ -370,10 +370,10 @@ User-configurable `adbPath` and `javaPath` with strict semantics (configured-but
 
 ### 20e. Verification
 
-- [ ] 20.21 Manual test: with `debugger-for-android.adbPath` set to a real path, verify attach uses that path (log line: `adb path (configured): <path>`). **Blocked on real device.**
-- [ ] 20.22 Manual test: with `debugger-for-android.adbPath` set to a non-existent path, verify the attach command fails with `errAdbConfiguredMissing` BEFORE `adb devices` runs. **Blocked on real device.**
+- [ ] 20.21 Manual test: with `vscode-android-debugger.adbPath` set to a real path, verify attach uses that path (log line: `adb path (configured): <path>`). **Blocked on real device.**
+- [ ] 20.22 Manual test: with `vscode-android-debugger.adbPath` set to a non-existent path, verify the attach command fails with `errAdbConfiguredMissing` BEFORE `adb devices` runs. **Blocked on real device.**
 - [ ] 20.23 Manual test: with `adbPath` default and no adb in `PATH`, no common-paths hit, no running adb → verify the attach command fails with `errAdbNotFound` BEFORE any device interaction. **Blocked on real device.**
-- [ ] 20.24 Manual test: with `debugger-for-android.javaPath` set to a real path with version < 8 → verify `detectJdk` rejects it and returns null, surfacing the JDK error. **Blocked on real JDK < 8 install.**
+- [ ] 20.24 Manual test: with `vscode-android-debugger.javaPath` set to a real path with version < 8 → verify `detectJdk` rejects it and returns null, surfacing the JDK error. **Blocked on real JDK < 8 install.**
 
 ## 21. Log Hygiene and Temp File Hygiene
 

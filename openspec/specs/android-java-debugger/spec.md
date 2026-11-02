@@ -175,7 +175,7 @@ The extension SHALL maintain an in-memory source index that maps class fully-qua
 - **AND** so VSCode highlights the correct line in the original source file
 
 #### Scenario: First-run migration from legacy settings storage
-- **WHEN** the extension activates in a workspace that has `debugger-for-android.sourceDirs` in `.vscode/settings.json` (single-folder) or in `.code-workspace` (multi-folder) but has an empty Memento
+- **WHEN** the extension activates in a workspace that has `vscode-android-debugger.sourceDirs` in `.vscode/settings.json` (single-folder) or in `.code-workspace` (multi-folder) but has an empty Memento
 - **THEN** on the first call to `getAllDirs()`, the manager reads the legacy config, resolves each relative path to an absolute path, deduplicates, and writes the result to Memento
 - **AND** the legacy settings entry is left untouched (no destructive cleanup) so the user can verify the migration before manually removing it
 - **AND** subsequent reads come from Memento only
@@ -298,7 +298,7 @@ The previous `Setup Cross-host Tunnel` command SHALL be removed entirely. There 
 
 #### Scenario: Command no longer registered
 - **WHEN** the extension is installed
-- **THEN** `debugger-for-android.setupTunnel` is NOT registered
+- **THEN** `vscode-android-debugger.setupTunnel` is NOT registered
 - **AND** no replacement command exists (the extension is zero-configuration for Remote-SSH)
 
 ### Requirement: 增量源码索引更新
@@ -429,7 +429,7 @@ Every debug session SHALL be fully torn down on termination: the session's Java 
 
 ### Requirement: Custom Restart Command
 
-The extension SHALL register a command `debugger-for-android.restartSession` (label: "Android: Restart Debug Session") that stops the active Android debug session and starts a new one against the same target PID with a brand-new forward, JVM, and DAP port. The command SHALL be visible in the command palette only when the active debug session is of type `android-java` (gated by `when: "debugType == 'android-java'"` in `package.json`).
+The extension SHALL register a command `vscode-android-debugger.restartSession` (label: "Android: Restart Debug Session") that stops the active Android debug session and starts a new one against the same target PID with a brand-new forward, JVM, and DAP port. The command SHALL be visible in the command palette only when the active debug session is of type `android-java` (gated by `when: "debugType == 'android-java'"` in `package.json`).
 
 #### Scenario: Restart command with active Android session
 
@@ -454,17 +454,17 @@ The extension SHALL register a command `debugger-for-android.restartSession` (la
 
 ### Requirement: Configurable Binary Paths
 
-The extension SHALL expose two VSCode configuration keys for pointing at the adb and JDK binaries: `debugger-for-android.adbPath` (default `"auto"`) and `debugger-for-android.javaPath` (default `"auto"`). When the value is non-`"auto"` and the file exists, that path SHALL be used. When the file is missing, the extension SHALL throw a clear error rather than silently fall back. When the value is `"auto"`, the extension SHALL run a deterministic discovery ladder.
+The extension SHALL expose two VSCode configuration keys for pointing at the adb and JDK binaries: `vscode-android-debugger.adbPath` (default `"auto"`) and `vscode-android-debugger.javaPath` (default `"auto"`). When the value is non-`"auto"` and the file exists, that path SHALL be used. When the file is missing, the extension SHALL throw a clear error rather than silently fall back. When the value is `"auto"`, the extension SHALL run a deterministic discovery ladder.
 
 #### Scenario: User-configured adbPath
-- **WHEN** user sets `debugger-for-android.adbPath` to `/opt/sdk/platform-tools/adb`
+- **WHEN** user sets `vscode-android-debugger.adbPath` to `/opt/sdk/platform-tools/adb`
 - **AND** the file exists
 - **THEN** `findAdb` returns `{ adbPath: '/opt/sdk/platform-tools/adb', source: 'config' }`
 - **AND** logs `adb path (configured): /opt/sdk/platform-tools/adb`
 
 #### Scenario: User-configured adbPath points at a missing file
-- **WHEN** user sets `debugger-for-android.adbPath` to a non-existent path
-- **THEN** `findAdb` throws "Configured adb path '<path>' does not exist; update `debugger-for-android.adbPath` or set to 'auto' for auto-detection"
+- **WHEN** user sets `vscode-android-debugger.adbPath` to a non-existent path
+- **THEN** `findAdb` throws "Configured adb path '<path>' does not exist; update `vscode-android-debugger.adbPath` or set to 'auto' for auto-detection"
 - **AND** does NOT silently fall back to PATH (wrong config is a config bug, surface it)
 
 #### Scenario: Auto-detect adb (running process wins)
@@ -488,19 +488,19 @@ The extension SHALL expose two VSCode configuration keys for pointing at the adb
 
 #### Scenario: Auto-detect adb finds nothing
 - **WHEN** no running adb, no common-path hit, no PATH hit
-- **THEN** `findAdbAuto` throws "adb binary not found. Set `debugger-for-android.adbPath` to the absolute path of adb, or add it to $PATH"
+- **THEN** `findAdbAuto` throws "adb binary not found. Set `vscode-android-debugger.adbPath` to the absolute path of adb, or add it to $PATH"
 - **AND** the attach command surfaces this error before any device interaction
 
 #### Scenario: User-configured javaPath
-- **WHEN** user sets `debugger-for-android.javaPath` to `/opt/jdk/bin/java`
+- **WHEN** user sets `vscode-android-debugger.javaPath` to `/opt/jdk/bin/java`
 - **AND** the file exists
 - **THEN** `detectJdk` runs `java -version` against that path
 - **AND** returns `{ javaPath, version }` when version >= 8
 - **AND** logs `JDK detected: <path> (version <v>)`
 
 #### Scenario: User-configured javaPath missing
-- **WHEN** user sets `debugger-for-android.javaPath` to a non-existent path
-- **THEN** `resolveJavaCandidates` throws "Configured java path '<path>' does not exist; update `debugger-for-android.javaPath` or set to 'auto'"
+- **WHEN** user sets `vscode-android-debugger.javaPath` to a non-existent path
+- **THEN** `resolveJavaCandidates` throws "Configured java path '<path>' does not exist; update `vscode-android-debugger.javaPath` or set to 'auto'"
 
 #### Scenario: Auto-detect JDK (JAVA_HOME)
 - **WHEN** `javaPath` is `"auto"` and `$JAVA_HOME` is set
@@ -516,7 +516,7 @@ The extension SHALL expose two VSCode configuration keys for pointing at the adb
 #### Scenario: JDK discovery deliberately skips platform common paths
 - **WHEN** the user has a JDK installed but neither `JAVA_HOME` nor `PATH` is set
 - **THEN** the extension SHALL NOT enumerate `/Library/Java/JavaVirtualMachines`, `C:\Program Files\Eclipse Adoptium\jdk-*`, distro package paths, etc.
-- **AND** instead returns null and the caller surfaces a clear error: "JDK 8+ is required on the local machine. Set `debugger-for-android.javaPath` or set $JAVA_HOME / add java to $PATH"
+- **AND** instead returns null and the caller surfaces a clear error: "JDK 8+ is required on the local machine. Set `vscode-android-debugger.javaPath` or set $JAVA_HOME / add java to $PATH"
 - **BECAUSE** JDK install paths change with every update (e.g. `jdk-21.0.9.10-hotspot`), branch across too many distributions to enumerate usefully, and almost always come with `JAVA_HOME` set by the installer — sticking to `JAVA_HOME` + `PATH` is deterministic and easy to reason about
 
 ### Requirement: Attach Pre-Flight Checks

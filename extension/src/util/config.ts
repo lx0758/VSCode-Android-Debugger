@@ -8,7 +8,7 @@ export interface ExtensionConfig {
 }
 
 export function getConfig(): ExtensionConfig {
-  const cfg = vscode.workspace.getConfiguration('debugger-for-android');
+  const cfg = vscode.workspace.getConfiguration('vscode-android-debugger');
   return {
     adbPath: cfg.get<string>('adbPath', 'auto'),
     javaPath: cfg.get<string>('javaPath', 'auto'),

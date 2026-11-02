@@ -8,7 +8,7 @@
 // `createDebugAdapterDescriptor` and returns its DAP port.
 //
 // For restart, the `restartActiveSession` bridge callback is wired up
-// via the existing `debugger-for-android.restartSession` command.
+// via the existing `vscode-android-debugger.restartSession` command.
 
 import * as vscode from 'vscode';
 import { Logger } from '../util/logger';

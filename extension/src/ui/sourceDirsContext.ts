@@ -3,7 +3,7 @@ import * as vscode from 'vscode';
 import { Logger } from '../util/logger';
 import { dirContextForms, parseDirEntry } from '../util/uri';
 
-export const SOURCE_DIR_PATHS_CONTEXT = 'debugger-for-android.sourceDirPaths';
+export const SOURCE_DIR_PATHS_CONTEXT = 'vscode-android-debugger.sourceDirPaths';
 
 /**
  * Publish marked dirs to the `when`-clause context. Entries arrive as URI

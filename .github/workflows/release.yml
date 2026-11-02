@@ -1,0 +1,182 @@
+name: Release
+
+# 以 git tag 作为版本号的唯一真相源:
+#   推送 vX.Y.Z 形式的 tag → 自动构建 → 发布到 VS Code Marketplace → 创建 GitHub Release
+on:
+  push:
+    tags:
+      - 'v*'
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: '20'
+  JAVA_VERSION: '21'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: 构建与打包
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 安装 JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: 安装 Node ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+
+      - name: 缓存 Gradle
+        uses: actions/cache@v4
+        with:
+          # ~/.gradle/caches 缓存依赖, ~/.gradle/wrapper 缓存 Gradle 发行版本身
+          # (否则每次 CI 都要重下 gradle-8.13-all.zip, 约 200MB)
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('adapter/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      - name: 同步版本号 (以 tag 为准)
+        id: version
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          node scripts/set-version.js "$TAG"
+          node scripts/update-changelog.js "$VERSION" "$(date -u +%Y-%m-%d)"
+
+      - name: 安装扩展依赖
+        run: npm ci --no-audit --no-fund
+        working-directory: extension
+
+      - name: Adapter 单元测试
+        run: ./gradlew --console=plain test
+        working-directory: adapter
+
+      - name: 构建 adapter jar 与扩展
+        run: npm run build
+
+      - name: 打包 VSIX
+        working-directory: extension
+        run: |
+          set -euo pipefail
+          mkdir -p ../dist
+          VSIX="../dist/vscode-android-debugger-${{ steps.version.outputs.version }}.vsix"
+          # vsce 从 cwd 读取 package.json, 因此必须在 extension/ 下执行
+          npx vsce package --no-dependencies --out "$VSIX"
+          ls -lh "$VSIX"
+
+      - name: 上传 VSIX 制品
+        uses: actions/upload-artifact@v4
+        with:
+          name: vsix
+          path: dist/vscode-android-debugger-${{ steps.version.outputs.version }}.vsix
+          if-no-files-found: error
+
+  marketplace:
+    name: 发布到 VS Code Marketplace
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      # job 级 env 可以引用 secrets; step 级 if 可以引用 env
+      VSCE_PAT: ${{ secrets.VSCE_PAT }}
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+
+      - name: 安装扩展依赖
+        run: npm ci --no-audit --no-fund
+        working-directory: extension
+
+      - name: 下载 VSIX
+        uses: actions/download-artifact@v4
+        with:
+          name: vsix
+          path: dist
+
+      - name: 检查发布凭据
+        id: cred
+        run: |
+          if [ -z "${VSCE_PAT:-}" ]; then
+            echo "has_pat=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::未配置 secret VSCE_PAT, 跳过 VS Code Marketplace 发布 (详见 docs/RELEASE.md)"
+          else
+            echo "has_pat=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 发布
+        if: steps.cred.outputs.has_pat == 'true'
+        working-directory: extension
+        run: |
+          set -euo pipefail
+          # --packagePath 直接发布已打包的 vsix, 不再触发 prepublish 构建
+          npx vsce publish \
+            --packagePath "../dist/vscode-android-debugger-${{ needs.build.outputs.version }}.vsix" \
+            --pat "$VSCE_PAT" \
+            --skip-duplicate
+
+  github-release:
+    name: 创建 GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 下载 VSIX
+        uses: actions/download-artifact@v4
+        with:
+          name: vsix
+          path: dist
+
+      - name: 创建 Release 并上传 VSIX
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          VSIX="dist/vscode-android-debugger-${VERSION}.vsix"
+          TITLE="v${VERSION}"
+          NOTES="$(cat <<EOF
+          由 tag \`${TAG}\` 自动发布。
+
+          - VS Code Marketplace: https://marketplace.visualstudio.com/items?itemName=6xyun.vscode-android-debugger
+          - 离线安装包: \`${VSIX}\`
+          EOF
+          )"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo ">>> Release $TAG 已存在, 覆盖附件"
+            gh release upload "$TAG" "$VSIX" --clobber
+            gh release edit "$TAG" --title "$TITLE" --notes "$NOTES"
+          else
+            gh release create "$TAG" --title "$TITLE" --notes "$NOTES" --verify-tag "$VSIX"
+          fi

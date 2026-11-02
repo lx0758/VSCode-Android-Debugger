@@ -518,7 +518,7 @@ export class SourceDirManager {
 | **canonical key** | `file:` → `uri.fsPath`（保持本地历史行为 `C:\x\Y.java`）；其余 scheme → `uri.path`（`/home/liux/Y.java`） | 索引条目 `file` 字段 + 断点 payload `source.path`（adapter normalize 后的内部键） + Kotlin adapter 内部键 |
 | **回显形态** | `file:` → fsPath；其余 → **完整 URI 字符串**（`clientPath(uri)` / 索引条目 `sourceUri` 字段 / adapter `displayPathByFile`） | **adapter 回显给 VSCode 的 DAP `source.path` 必须用这个形态**——bare posix 路径在 Windows 客户端被解析成本机路径（`\home\...`），堆栈帧打不开文件、verified 断点无法定位回文件（灰色不亮）；VSCode 自己发 setBreakpoints 用的就是完整 remote URI，回显原样奉还即可解析 |
 | **adapter 归一化** | `normalizeSourcePath`：剥离 `vscode-remote://<authority>` / `file://<authority>` 前缀 | VSCode 标准 `setBreakpoints` 在远程窗口发的 `source.path` 是完整 URI，归一化后与索引键对齐 |
-| **context 多形态** | `dirContextForms`：URI 字符串 / `uri.path` / `fsPath` 全形态超集 | `debugger-for-android.sourceDirPaths` context key，`resourcePath in <set>` 在本地/远程窗口都能命中 |
+| **context 多形态** | `dirContextForms`：URI 字符串 / `uri.path` / `fsPath` 全形态超集 | `vscode-android-debugger.sourceDirPaths` context key，`resourcePath in <set>` 在本地/远程窗口都能命中 |
 
 #### 5.5.1 UIManager 与 UiBridges
 

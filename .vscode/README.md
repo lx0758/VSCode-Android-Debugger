@@ -4,7 +4,7 @@ VSCode extension for debugging AOSP framework / system app Java code via JDWP.
 
 ## Develop
 
-1. 在 VSCode 中打开本仓库根 (即 `code /path/to/debugger-for-android`)
+1. 在 VSCode 中打开本仓库根 (即 `code /path/to/vscode-android-debugger`)
 2. 运行配置下拉框选择 `Run Extension` (或按 `F5`)
 3. 弹出新的 [Extension Development Host] 窗口, 加载 `extension/` 子目录里的扩展, EDH 默认打开 `sampleWorkspace/` 目录
 4. 主窗口停在断点位置时, 表示扩展本身正在被调试

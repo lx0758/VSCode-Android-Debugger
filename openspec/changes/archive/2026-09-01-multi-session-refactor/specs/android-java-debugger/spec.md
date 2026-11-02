@@ -54,7 +54,7 @@ Every debug session SHALL be fully torn down on termination: the session's Java 
 
 ### Requirement: Custom Restart Command
 
-The extension SHALL register a command `debugger-for-android.restartSession` (label: "Android: Restart Debug Session") that stops the active Android debug session and starts a new one against the same target PID with a brand-new forward, JVM, and DAP port. The command SHALL be visible in the command palette only when the active debug session is of type `android-java` (gated by `when: "debugType == 'android-java'"` in `package.json`).
+The extension SHALL register a command `vscode-android-debugger.restartSession` (label: "Android: Restart Debug Session") that stops the active Android debug session and starts a new one against the same target PID with a brand-new forward, JVM, and DAP port. The command SHALL be visible in the command palette only when the active debug session is of type `android-java` (gated by `when: "debugType == 'android-java'"` in `package.json`).
 
 #### Scenario: Restart command with active Android session
 

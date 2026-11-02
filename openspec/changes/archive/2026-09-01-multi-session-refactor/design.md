@@ -19,7 +19,7 @@ MVP 阶段（单会话单设备）通过 3 个模块级单例支撑：`AndroidJa
 **Non-Goals:**
 - 不改 VSCode debug 协议（仍走标准 DAP + 自定义请求，现名 `custom/syncSourceIndex` / `custom/syncBreakpoints`；原名 `sourceDirs/set` / `sourceDirs/add` / `syncBreakpoints`，`add` 已删除、其余已加 `custom/` 前缀，见 R8）
 - 不改 Java Adapter 与设备的交互协议（仍走 JDWP / JDI）
-- 不改 UI 命令的外部语义（`debugger-for-android.attach` 等命令 ID 不变）
+- 不改 UI 命令的外部语义（`vscode-android-debugger.attach` 等命令 ID 不变）
 - 不引入新的 capability 边界（spec 仍为 `android-java-debugger`，所有 delta 都在其中）
 - 不做性能优化（重构以"行为不变"为验收基准，性能在后续 change 评估）
 
@@ -159,7 +159,7 @@ MVP 阶段（单会话单设备）通过 3 个模块级单例支撑：`AndroidJa
 
 ### Slice 1 — SourceDirManager 抽离（低风险）
 **目标**：把 `src/source/dirs.ts` 移到 `src/core/SourceDirManager.ts`，更新 import 路径。功能不变。
-**验证**：`npm run compile` 通过；`debugger-for-android.markSourceDir` / `unmarkSourceDir` 命令行为不变。
+**验证**：`npm run compile` 通过；`vscode-android-debugger.markSourceDir` / `unmarkSourceDir` 命令行为不变。
 
 ### Slice 2 — indexer 包拆分（中风险）
 **目标**：`src/source/indexer.ts` 拆成 `src/core/indexer/{Indexer, LocalIndexer, RemoteIndexer, IndexerFactory}.ts`。`buildIndex` / `parseJavaFile` / `parseKotlinFile` 逻辑迁移，文件名按架构图统一。

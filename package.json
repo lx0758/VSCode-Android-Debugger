@@ -1,5 +1,5 @@
 {
-  "name": "debugger-for-android-monorepo",
+  "name": "vscode-android-debugger-monorepo",
   "version": "0.1.0",
   "private": true,
   "description": "Monorepo for Android Java Debugger (VSCode extension + Java adapter)",
@@ -11,6 +11,8 @@
     "tsc:watch": "npm --prefix extension run watch",
     "build": "node scripts/build-all.js",
     "package": "npm --prefix extension run package",
-    "test": "npm --prefix extension test"
+    "test": "npm --prefix extension test",
+    "version:sync": "node scripts/set-version.js",
+    "changelog:new": "node scripts/update-changelog.js"
   }
 }

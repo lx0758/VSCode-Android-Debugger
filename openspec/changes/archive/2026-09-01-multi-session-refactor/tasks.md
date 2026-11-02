@@ -3,7 +3,7 @@
 - [x] 1.1 创建 `src/core/SourceDirManager.ts`，将 `src/source/dirs.ts` 的 `SourceDirsManager` 类迁移过去；构造函数接受 `vscode.ExtensionContext`（从 `context.workspaceState` 取 Memento）；事件类型改为 `DirsChangeCallback: () => void`；保留 `getAllDirs / addDir / removeDir / contains / findCoveringAncestor / getDirsForUriSync / onDidChange` 全部方法和 `migrateLegacyConfigIfNeeded` 私有逻辑。验证：`npm run compile` 通过。
 - [x] 1.2 更新所有引用 `source/dirs` 的 import 路径到 `core/SourceDirManager`（包括 `extension.local.ts` / `source/decoration.ts` / `source/treeView.ts` / `commands/attach.ts` / `commands/markSourceDir.ts` 等）。验证：`npm run compile` 0 error。
 - [x] 1.3 删除 `src/source/dirs.ts`。验证：`git grep "source/dirs"` 无业务代码命中。
-- [x] 1.4 F5 启动调试，验证 `debugger-for-android.markSourceDir` / `unmarkSourceDir` 命令行为不变（标记 / 取消 / 重复标记 / 父目录覆盖提示）。验证：用户视角无回归。
+- [x] 1.4 F5 启动调试，验证 `vscode-android-debugger.markSourceDir` / `unmarkSourceDir` 命令行为不变（标记 / 取消 / 重复标记 / 父目录覆盖提示）。验证：用户视角无回归。
 
 ## 2. Slice 2 — indexer 包拆分（中风险）
 
@@ -57,7 +57,7 @@
 - [x] 6.7 T5 重写 `src/commands/attach.ts`：只剩 `pickDevice` + `pickProcess` + `sessionManager.attachToProcess(device, process)`，删除所有资源创建 / spawn JVM / port 分配逻辑。验证：attach 命令外部行为不变。
 - [x] 6.8 T6 在 `Extension.ts` 注册桥接：`idx.onIndexReady → ses.broadcastIndex`；`bpm.onBreakpointsChanged → ses.broadcastBreakpoints`；`bpm.onNewFileNeedsIndex → idx.addFiles`；`ses.setSessionInitializer → ctx.syncBreakpoints(bpm.getCurrentBreakpoints())`。验证：4 个 Manager 通过 Extension 桥接形成完整数据流。
 - [x] 6.9 T7 删除 `src/extension.local.ts`。验证：`git grep` 无业务代码命中。
-- [x] 6.10 T8 删除 `src/commands/restartSession.ts`（合并到 `SessionManager.restartActiveSession`），更新 import。验证：`debugger-for-android.restartSession` 命令仍可用。
+- [x] 6.10 T8 删除 `src/commands/restartSession.ts`（合并到 `SessionManager.restartActiveSession`），更新 import。验证：`vscode-android-debugger.restartSession` 命令仍可用。
 - [x] 6.11 T9 删除 `src/source/breakpointFiles.ts`（已被 BreakpointManager 吸收）。验证：`git grep` 无业务代码命中。
 - [x] 6.12 端到端验证：开两个 attach（同一设备两个 process 或两个设备），两个 session 同时存活；任一 terminate 都不影响另一个；sourceDirs 变更同时广播到两个；BP 切换只影响对应 session。验证：多会话核心场景通过。
 

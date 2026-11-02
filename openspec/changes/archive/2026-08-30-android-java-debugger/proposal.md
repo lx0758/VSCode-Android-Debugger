@@ -12,7 +12,7 @@ AOSP 开发者需要: 在 VSCode 里对工作区任意 .java/.kt 设断点, 通�
 
 ## What Changes
 
-新增 VSCode 扩展 `debugger-for-android`, 由两部分组成:
+新增 VSCode 扩展 `vscode-android-debugger`, 由两部分组成:
 
 - **TypeScript extension** (`extension/`): UI 集成 (命令注册 / QuickPick / 标记根管理 / 配置 / 源码索引)
 - **Java debug adapter** (`adapter/`): DAP server + JDI 客户端, 通过 `adb forward` 桥接设备 JDWP socket
@@ -91,7 +91,7 @@ AOSP 开发者常见工作模式是 Remote-SSH (源码在远程 Linux 服务器,
 | 整个 AOSP (30k) | 5-25 分钟 (需硬卡) | 15-30 秒 (可接受) |
 
 **配置项**:
-- `debugger-for-android.index.maxFiles`: 单次构建最多索引的文件数 (默认 10000), 防止误标记整个 AOSP 卡死扩展 (v4-alt 整个 AOSP 也才 30s, 兜底)
+- `vscode-android-debugger.index.maxFiles`: 单次构建最多索引的文件数 (默认 10000), 防止误标记整个 AOSP 卡死扩展 (v4-alt 整个 AOSP 也才 30s, 兜底)
 - **源目录列表**: 不再用 `ConfigurationTarget` 写 settings 文件, 改为 `ExtensionContext.workspaceState` Memento 持久化 (per-workspace 隔离, 不入 git, 单/多 folder 模式自动统一)
 - ~~`sshMode` / `sshUser` / `sshIdentityFile`~~: 全部移除
 

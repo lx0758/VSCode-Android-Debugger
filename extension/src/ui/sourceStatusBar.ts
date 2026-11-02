@@ -15,7 +15,7 @@ export class StatusBarManager {
     this.item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
     this.countItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 1);
     this.indexerModeItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 2);
-    this.countItem.command = 'debugger-for-android.openExplorer';
+    this.countItem.command = 'vscode-android-debugger.openExplorer';
     this.countItem.tooltip = t.sourceDirsCountHint();
   }
 
@@ -57,7 +57,7 @@ export class StatusBarManager {
       case 'idle':
         this.item.text = `$(debug-disconnect) ${t.statusBarIdle()}`;
         this.item.tooltip = t.statusBarIdleTooltip();
-        this.item.command = 'debugger-for-android.attach';
+        this.item.command = 'vscode-android-debugger.attach';
         this.hideIndexerMode();
         break;
       case 'indexing':

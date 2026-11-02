@@ -158,7 +158,7 @@ export class SourceDirManager {
 
     for (const folder of folders) {
       try {
-        const cfg = vscode.workspace.getConfiguration('debugger-for-android', folder.uri);
+        const cfg = vscode.workspace.getConfiguration('vscode-android-debugger', folder.uri);
         const dirs = cfg.get<string[]>('sourceDirs', []);
         for (const r of dirs) {
           const abs = path.isAbsolute(r) ? r : path.resolve(folder.uri.fsPath, r);
@@ -171,7 +171,7 @@ export class SourceDirManager {
 
     if (vscode.workspace.workspaceFile) {
       try {
-        const cfg = vscode.workspace.getConfiguration('debugger-for-android');
+        const cfg = vscode.workspace.getConfiguration('vscode-android-debugger');
         const dirs = cfg.get<string[]>('sourceDirs', []);
         for (const r of dirs) {
           if (path.isAbsolute(r)) {

@@ -1,4 +1,4 @@
-# Android Java Debugger
+# VSCode Android Debugger
 
 VSCode 扩展 + Kotlin JDI 调试适配器, 通过 JDWP attach 到 Android framework / 系统应用的 Java 进程, 在 AOSP 源码 workspace 中实现断点、步进、栈与变量查看。
 
@@ -44,7 +44,18 @@ npm test
 输出位置:
 - adapter jar → `extension/resources/adapter.jar`
 - 扩展 JS → `extension/out/`
-- VSIX → `extension/debugger-for-android-0.1.0.vsix`
+- VSIX → `extension/vscode-android-debugger-0.1.0.vsix`
+
+## 发布
+
+版本号以 git tag 为唯一真相源。推送 `vX.Y.Z` 形式的 tag 后, GitHub Actions 会自动构建、发布到 VS Code Marketplace 并创建 GitHub Release:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+前提条件与完整说明见 [docs/RELEASE.md](docs/RELEASE.md)。仓库需配置 `VSCE_PAT` secret (Azure DevOps PAT, 需 Marketplace Manage 作用域) 才能发布到 Marketplace。
 
 ## 本地开发
 
@@ -77,14 +88,14 @@ git update-index --no-assume-unchanged ./workspace/sample.code-workspace
 - **本地 ext host (kind=ui)**: 负责所有用户 UI、`adb` 命令、`adb forward`、启动 Java Adapter
 - **远程 ext host (kind=workspace)**: 仅暴露一个 `buildIndex(sourceDirs)` API, 通过原生 FS 读取构建源索引
 
-跨主机调用通过 `vscode.extensions.getExtension('anomaly.debugger-for-android').exports.buildIndex(...)` 完成 (VSCode 官方模式, 由 VSCode 代理跨 host 调用)。Java Adapter 始终运行在本地, JDWP socket 是 `127.0.0.1:<随机端口>` → 本地 `adb forward` → 设备。
+跨主机调用通过 `vscode.extensions.getExtension('anomaly.vscode-android-debugger').exports.buildIndex(...)` 完成 (VSCode 官方模式, 由 VSCode 代理跨 host 调用)。Java Adapter 始终运行在本地, JDWP socket 是 `127.0.0.1:<随机端口>` → 本地 `adb forward` → 设备。
 
 **无需任何手动配置**: 无 SSH 隧道、无反向端口、无本地 SSH server、无 sshfs 挂载。如果远程 ext 激活失败, 本地 ext 自动降级到跨 host read 模式 (会慢一些但仍可用)。
 
 ## 项目结构
 
 ```
-debugger-for-android/
+vscode-android-debugger/
 ├── extension/           # VSCode 扩展 (TypeScript)
 │   ├── src/
 │   │   ├── adb/         # adb 路径探测、命令执行、JDWP 转发
@@ -115,9 +126,9 @@ debugger-for-android/
 
 ## 配置项
 
-- `debugger-for-android.adbPath`: `adb` 路径, 默认 `auto` 自动探测
-- `debugger-for-android.sourceDirs`: 调试源目录路径列表 (相对工作区文件夹)
-- `debugger-for-android.index.maxFiles`: 源索引允许的最大文件数, 默认 10000; 超过时会预估耗时并询问是否继续
+- `vscode-android-debugger.adbPath`: `adb` 路径, 默认 `auto` 自动探测
+- `vscode-android-debugger.sourceDirs`: 调试源目录路径列表 (相对工作区文件夹)
+- `vscode-android-debugger.index.maxFiles`: 源索引允许的最大文件数, 默认 10000; 超过时会预估耗时并询问是否继续
 
 ## 故障排除
 
@@ -161,4 +172,4 @@ restart adbd
 
 ## 许可证
 
-TBD
+MIT

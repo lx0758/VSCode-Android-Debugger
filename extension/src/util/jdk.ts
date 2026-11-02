@@ -59,7 +59,7 @@ export async function detectJdk(configuredPath: string): Promise<JdkInfo | null>
   }
   Logger.warn(
     `[jdk] no usable JDK found. Checked: ${candidates.length === 0 ? '(no candidates)' : candidates.join(', ')}. ` +
-    `Set 'debugger-for-android.javaPath' to an absolute path of a JDK 8+ install if autodetect misses it.`
+    `Set 'vscode-android-debugger.javaPath' to an absolute path of a JDK 8+ install if autodetect misses it.`
   );
   return null;
 }

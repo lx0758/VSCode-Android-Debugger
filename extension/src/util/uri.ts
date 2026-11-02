@@ -101,7 +101,7 @@ export function isUnderDir(child: vscode.Uri, dir: vscode.Uri): boolean {
 
 /**
  * Every string form a dir may take in `when`-clause comparisons and legacy
- * lookups. Used for the `debugger-for-android.sourceDirPaths` context key so
+ * lookups. Used for the `vscode-android-debugger.sourceDirPaths` context key so
  * `resourcePath in ...` matches regardless of which form VSCode provides.
  */
 export function dirContextForms(uri: vscode.Uri): string[] {

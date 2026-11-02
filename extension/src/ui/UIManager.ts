@@ -4,7 +4,7 @@
 //   - status bar (attach state + marked-dir count)
 //   - "Android Debugger" source-dirs tree view
 //   - file decorations (⚡ badge on marked dirs)
-//   - the `debugger-for-android.sourceDirPaths` context key that drives
+//   - the `vscode-android-debugger.sourceDirPaths` context key that drives
 //     the explorer context menu (mark/unmark entries)
 //   - all user-facing commands
 //
@@ -50,7 +50,7 @@ export class UIManager implements vscode.Disposable {
     this.disposables.push(
       this.statusBar,
       vscode.window.registerFileDecorationProvider(this.decorationProvider),
-      vscode.window.createTreeView('debugger-for-android.sourceDirs', {
+      vscode.window.createTreeView('vscode-android-debugger.sourceDirs', {
         treeDataProvider: this.treeProvider,
         showCollapseAll: false,
       }),
@@ -58,7 +58,7 @@ export class UIManager implements vscode.Disposable {
       deps.dirs.onDidChange(() => this.refreshAll())
     );
 
-    // Set the `debugger-for-android.sourceDirPaths` context up-front so the
+    // Set the `vscode-android-debugger.sourceDirPaths` context up-front so the
     // explorer context menu (unmark entry) reflects dirs marked in earlier
     // sessions right after activation.
     void this.refreshContextKey();
@@ -67,36 +67,36 @@ export class UIManager implements vscode.Disposable {
   registerCommands(): void {
     let openExplorerHintShown = false;
     this.disposables.push(
-      vscode.commands.registerCommand('debugger-for-android.markSourceDir', (uri?: vscode.Uri) => {
+      vscode.commands.registerCommand('vscode-android-debugger.markSourceDir', (uri?: vscode.Uri) => {
         void runMarkSourceDir(this.dirs, uri);
       }),
-      vscode.commands.registerCommand('debugger-for-android.unmarkSourceDir', (uri?: vscode.Uri) => {
+      vscode.commands.registerCommand('vscode-android-debugger.unmarkSourceDir', (uri?: vscode.Uri) => {
         void runUnmarkSourceDir(this.dirs, uri);
       }),
-      vscode.commands.registerCommand('debugger-for-android.unmarkFromDir', (item: SourceDirItem) => {
+      vscode.commands.registerCommand('vscode-android-debugger.unmarkFromDir', (item: SourceDirItem) => {
         const uri = item?.resourceUri;
         if (!uri) return;
         void runUnmarkSourceDir(this.dirs, uri);
       }),
       vscode.commands.registerCommand(
-        'debugger-for-android.revealInExplorer',
+        'vscode-android-debugger.revealInExplorer',
         async (item: SourceDirItem) => {
           if (!item?.resourceUri) return;
           await vscode.commands.executeCommand('workbench.view.explorer');
           await vscode.commands.executeCommand('revealInExplorer', item.resourceUri);
         }
       ),
-      vscode.commands.registerCommand('debugger-for-android.openExplorer', async () => {
+      vscode.commands.registerCommand('vscode-android-debugger.openExplorer', async () => {
         // Primary: the auto-registered command for our extension-contributed
         // activity-bar view container.
         try {
           await vscode.commands.executeCommand(
-            'workbench.view.extension.debugger-for-android-explorer'
+            'workbench.view.extension.vscode-android-debugger-explorer'
           );
           return;
         } catch (e) {
           Logger.warn(
-            `[UI] workbench.view.extension.debugger-for-android-explorer failed: ${(e as Error).message}`
+            `[UI] workbench.view.extension.vscode-android-debugger-explorer failed: ${(e as Error).message}`
           );
         }
         // Fallback: focus the activity bar so the user can click the icon,
@@ -114,18 +114,18 @@ export class UIManager implements vscode.Disposable {
           );
           if (choice === t.openExplorerFallbackAction()) {
             await vscode.commands.executeCommand('workbench.view.explorer');
-            await vscode.commands.executeCommand('debugger-for-android.markSourceDir');
+            await vscode.commands.executeCommand('vscode-android-debugger.markSourceDir');
           }
         }
       }),
-      vscode.commands.registerCommand('debugger-for-android.attach', () => {
+      vscode.commands.registerCommand('vscode-android-debugger.attach', () => {
         void runAttachCommand({
           attachToProcess: (device, process) => this.session.attachToProcess(device, process),
           restartActiveSession: () => this.session.restartActiveSession(),
           statusBar: this.statusBar,
         });
       }),
-      vscode.commands.registerCommand('debugger-for-android.restartSession', () => {
+      vscode.commands.registerCommand('vscode-android-debugger.restartSession', () => {
         void runRestartSessionCommand({
           attachToProcess: (device, process) => this.session.attachToProcess(device, process),
           restartActiveSession: () => this.session.restartActiveSession(),

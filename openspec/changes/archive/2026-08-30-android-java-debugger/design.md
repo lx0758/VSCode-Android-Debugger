@@ -71,7 +71,7 @@ Two main runtime constraints drive the architecture:
 
 ### Decision 4: Per-workspace Memento storage for source roots (revised)
 
-**Choice:** Source dir configuration is stored in `ExtensionContext.workspaceState` (VSCode Memento, per-workspace SQLite) as a JSON array of absolute paths. The key is `debugger-for-android.sourceDirs`.
+**Choice:** Source dir configuration is stored in `ExtensionContext.workspaceState` (VSCode Memento, per-workspace SQLite) as a JSON array of absolute paths. The key is `vscode-android-debugger.sourceDirs`.
 
 **Rationale:**
 - Memento is automatically scoped by VSCode to the workspace identity (single-folder workspace, multi-folder `.code-workspace`, or Remote-SSH workspace each get a distinct SQLite database). There is no ambiguity about which file holds the data, no path-format normalization needed, and no migration when the user switches between single-folder and multi-folder modes.
@@ -80,7 +80,7 @@ Two main runtime constraints drive the architecture:
 - Memento persists across VSCode restarts and survives workspace reopens. It is cleared only by explicit user action (`Workspaces: Clear Workspace Storage...`).
 
 **Migration from previous settings-based storage:**
-On the first call to `getAllDirs()`, if Memento is empty AND a legacy `debugger-for-android.sourceDirs` exists in `.vscode/settings.json` (single-folder) or in `.code-workspace` (multi-folder), the manager resolves each relative entry to an absolute path, deduplicates, and writes the result to Memento. The legacy settings entry is left untouched so the user can verify the migration before removing it manually. Migration is idempotent — once Memento has entries, settings are not consulted again.
+On the first call to `getAllDirs()`, if Memento is empty AND a legacy `vscode-android-debugger.sourceDirs` exists in `.vscode/settings.json` (single-folder) or in `.code-workspace` (multi-folder), the manager resolves each relative entry to an absolute path, deduplicates, and writes the result to Memento. The legacy settings entry is left untouched so the user can verify the migration before removing it manually. Migration is idempotent — once Memento has entries, settings are not consulted again.
 
 **Alternatives considered:**
 - *Per-folder `.vscode/settings.json`*: forces `ConfigurationTarget.WorkspaceFolder` vs `Workspace` selection based on single/multi-folder mode, requires path-format normalization, and leaves orphan data in the wrong file when switching modes. Rejected after first round of user feedback.
@@ -108,7 +108,7 @@ On the first call to `getAllDirs()`, if Memento is empty AND a legacy `debugger-
 
 - **Local ext host (`kind=ui`)**: hosts all user UI (commands, QuickPick, status bar), runs `adb` as a local child process, spawns the Java Adapter locally, and coordinates indexing by calling the remote ext's `buildIndex()` API.
 - **Remote ext host (`kind=workspace`)**: exposes **only one function** via `activate()` return value: `buildIndex(sourceDirs: string[]): Promise<FqnEntry[]>`. This function walks the workspace using local `vscode.workspace.findFiles` + `fs.readFile` (which is a native local FS read on the remote side, ~microseconds per file), parses `package` + class declarations in TS, and returns the `FQN → file path` entries.
-- **Cross-host IPC**: local ext calls `vscode.extensions.getExtension('publisher.debugger-for-android').exports.buildIndex(sourceDirs)`. VSCode proxies this call across the SSH tunnel automatically.
+- **Cross-host IPC**: local ext calls `vscode.extensions.getExtension('publisher.vscode-android-debugger').exports.buildIndex(sourceDirs)`. VSCode proxies this call across the SSH tunnel automatically.
 - **Fallback**: if the remote ext fails to load (network issue, activation failure), local ext catches and falls back to its own cross-host `vscode.workspace.fs.readFile` (slow path, identical to v4 behavior).
 - **Local-only adb + Java Adapter**: `adb forward tcp:LP jdwp:<pid>` and Java Adapter both run on local; Java Adapter connects to `127.0.0.1:<LP>` directly. Zero tunnels for JDWP.
 
@@ -200,7 +200,7 @@ Mitigations retained from v4: progress notification with cancel, pre-flight file
 **Rationale:**
 - The local half needs to be on the user's machine for UI access (commands in palette, QuickPicks, status bar).
 - The remote half has direct access to the workspace filesystem — no cross-host latency for file reads.
-- Cross-host IPC via `vscode.extensions.getExtension('publisher.debugger-for-android').exports` is the official VSCode pattern for dual extensions and works through the SSH tunnel automatically.
+- Cross-host IPC via `vscode.extensions.getExtension('publisher.vscode-android-debugger').exports` is the official VSCode pattern for dual extensions and works through the SSH tunnel automatically.
 - The remote half is genuinely small (~50 lines): one exported function, one findFiles call, one readFile loop, one regex parse, one return. No long-lived state, no DAP, no Java spawning, no ssh.
 - If either half fails to activate (network issue, host version mismatch), the other half continues to work — local half falls back to its own cross-host read (v4 behavior).
 
@@ -214,7 +214,7 @@ Mitigations retained from v4: progress notification with cancel, pre-flight file
 
 **Choice:** The remote ext's `activate()` returns an object exposing `buildIndex(sourceDirs: string[])`. The local ext retrieves this via:
 ```typescript
-const ext = vscode.extensions.getExtension('publisher.debugger-for-android');
+const ext = vscode.extensions.getExtension('publisher.vscode-android-debugger');
 if (!ext) throw new Error('Remote ext not loaded');
 await ext.activate(); // ensures activation
 const entries = await ext.exports.buildIndex(sourceDirs);
@@ -430,7 +430,7 @@ Each session's `finally` block runs `sessionExecutor.shutdown()` + `sessionExecu
    - **macOS:** returns `null` — there's no `/proc` and no clean cross-process binary path reader (would require `lsof` shell pipelines). Falls through to common paths / PATH.
 3. **Common install paths (auto only).** Per-platform short list: Linux `/opt/android-sdk/platform-tools/adb`, `~/Android/Sdk/platform-tools/adb`, etc.; macOS `~/Library/Android/sdk/platform-tools/adb`, `/opt/homebrew/bin/adb`, `/usr/local/bin/adb`; Windows `%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe`, `%ProgramFiles%\Android\platform-tools\adb.exe`. First one whose `isExecutableFile(p)` (`fs.statSync(p).isFile()`) returns true wins.
 4. **`$PATH` (auto only).** `findAdbInPath()` splits `$PATH` (on `:` Unix / `;` Windows) and checks each directory for `adb` / `adb.exe`. First match wins.
-5. **Error.** If 2-4 yield nothing, throw `errAdbNotFound`. The user sees "adb binary not found. Set `debugger-for-android.adbPath` to the absolute path of adb, or add it to $PATH" BEFORE any device interaction.
+5. **Error.** If 2-4 yield nothing, throw `errAdbNotFound`. The user sees "adb binary not found. Set `vscode-android-debugger.adbPath` to the absolute path of adb, or add it to $PATH" BEFORE any device interaction.
 
 `AdbPathResult.source` is reduced to two coarse buckets: `'config'` and `'auto'`. The internal ladder step (running / common / PATH) is logged for debugging but not exposed in the result type — callers don't need to distinguish.
 
@@ -501,7 +501,7 @@ The Output channel previously drowned on commands like `adb shell ps -A -o PID,N
 **Alternatives considered:**
 - *Pretty-print only the first N rows and `... [+M rows]`*: more useful but adds a parser. 200-char truncation is a single substring + concat — trivial cost.
 - *Log only on non-zero exit*: hides useful "the command worked but the output is weird" diagnostics. Rejected.
-- *Log full output to a per-command file under `.vscode/debugger-for-android/logs/`*: useful for deep debugging but adds a parallel file API the user has to learn. Defer to V2 if needed.
+- *Log full output to a per-command file under `.vscode/vscode-android-debugger/logs/`*: useful for deep debugging but adds a parallel file API the user has to learn. Defer to V2 if needed.
 
 ### Decision 21: Static checks before device interaction in attach flow
 
@@ -547,7 +547,7 @@ AOSP `frameworks/base` has ~30000 `.java` files. Even scoped to marked roots, in
 
 **R6: adb path detection across platforms**
 adb lives in different default locations on Linux/macOS/Windows.
-*Mitigation:* TS extension probes common paths and `PATH`. If detection fails, user is prompted to set `debugger-for-android.adbPath`.
+*Mitigation:* TS extension probes common paths and `PATH`. If detection fails, user is prompted to set `vscode-android-debugger.adbPath`.
 
 **R7: Adapter JVM leaks if VSCode is force-quit mid-session**
 If the user kills VSCode (process kill, OS shutdown) before `onDidTerminateDebugSession` fires, the JVM and adb forward leak. Decision 14's `deactivate()` covers the standard shutdown path; force-quit (where `deactivate` may not run) is a gap.
@@ -591,6 +591,6 @@ VSCode's `onDidStartDebugSession` for a toolbar-Restarted session receives a con
 
 9. **Restart cost amortization** — Decision 14 makes restart = full re-attach (new forward, new JVM, new DAP port). For an attached process that's behaving normally, this adds 1-2 seconds per restart cycle. Acceptable for "I need to restart because the session broke", but annoying for "I'm stepping through code and restarting every few minutes". Could optimize by caching the JVM across restarts in cases where the JVM is still alive and the forward can be reused (no adbd hiccup, no process recycle). Defer; revisit if user feedback indicates restart latency is a friction point.
 
-10. **macOS adb-discovery step 2** — Decision 17 deliberately skips the "running adb" step on macOS because there's no clean cross-process binary path reader without `lsof` shell pipelines. macOS users on Homebrew will get their adb via the common-paths step; users with custom adb installs (e.g. `nix` profile) will need `debugger-for-android.adbPath`. Acceptable; document.
+10. **macOS adb-discovery step 2** — Decision 17 deliberately skips the "running adb" step on macOS because there's no clean cross-process binary path reader without `lsof` shell pipelines. macOS users on Homebrew will get their adb via the common-paths step; users with custom adb installs (e.g. `nix` profile) will need `vscode-android-debugger.adbPath`. Acceptable; document.
 
 11. **JDK enumeration policy future-proofing** — Decision 18 refuses to enumerate platform common paths. This is right for today, but if the JDK ecosystem ever shifts (e.g. Ubuntu dropping `JAVA_HOME` defaults), users on those platforms will need `javaPath` config. Document the policy clearly in the README so users know what to set if autodetection fails.

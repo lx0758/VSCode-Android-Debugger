@@ -1,5 +1,5 @@
 {
-  "name": "debugger-for-android",
+  "name": "vscode-android-debugger",
   "displayName": "%displayName%",
   "description": "%description%",
   "version": "0.1.0",
@@ -7,13 +7,13 @@
   "publisher": "6xyun",
   "icon": "resources/icon.png",
   "extensionKind": ["ui", "workspace"],
-  "homepage": "https://github.com/lx0758/debugger-for-android#readme",
+  "homepage": "https://github.com/lx0758/vscode-android-debugger#readme",
   "repository": {
       "type": "git",
-      "url": "git+https://github.com/lx0758/debugger-for-android.git"
+      "url": "git+https://github.com/lx0758/vscode-android-debugger.git"
   },
   "bugs": {
-      "url": "https://github.com/lx0758/debugger-for-android/issues"
+      "url": "https://github.com/lx0758/vscode-android-debugger/issues"
   },
   "license": "MIT",
   "engines": {
@@ -47,33 +47,33 @@
   "contributes": {
     "commands": [
       {
-        "command": "debugger-for-android.attach",
+        "command": "vscode-android-debugger.attach",
         "title": "%commands.attach.title%",
         "category": "%commands.category.androidDebug%",
         "icon": "$(debug-start)"
       },
       {
-        "command": "debugger-for-android.restartSession",
+        "command": "vscode-android-debugger.restartSession",
         "title": "%commands.restartSession.title%",
         "category": "%commands.category.androidDebug%",
         "icon": "$(debug-rerun)"
       },
       {
-        "command": "debugger-for-android.markSourceDir",
+        "command": "vscode-android-debugger.markSourceDir",
         "title": "%commands.markSourceDir.title%"
       },
       {
-        "command": "debugger-for-android.unmarkSourceDir",
+        "command": "vscode-android-debugger.unmarkSourceDir",
         "title": "%commands.unmarkSourceDir.title%"
       },
       {
-        "command": "debugger-for-android.unmarkFromDir",
+        "command": "vscode-android-debugger.unmarkFromDir",
         "title": "%commands.unmarkFromDir.title%",
         "icon": "$(close)",
         "category": "%commands.category.androidDebug%"
       },
       {
-        "command": "debugger-for-android.revealInExplorer",
+        "command": "vscode-android-debugger.revealInExplorer",
         "title": "%commands.revealInExplorer.title%",
         "icon": "$(folder-open)",
         "category": "%commands.category.androidDebug%"
@@ -81,40 +81,40 @@
     ],
     "menus": {
       "commandPalette": [
-        { "command": "debugger-for-android.markSourceDir", "when": "false" },
-        { "command": "debugger-for-android.unmarkSourceDir", "when": "false" },
-        { "command": "debugger-for-android.unmarkFromDir", "when": "false" },
-        { "command": "debugger-for-android.revealInExplorer", "when": "false" },
-        { "command": "debugger-for-android.restartSession", "when": "debugType == 'android-java'" }
+        { "command": "vscode-android-debugger.markSourceDir", "when": "false" },
+        { "command": "vscode-android-debugger.unmarkSourceDir", "when": "false" },
+        { "command": "vscode-android-debugger.unmarkFromDir", "when": "false" },
+        { "command": "vscode-android-debugger.revealInExplorer", "when": "false" },
+        { "command": "vscode-android-debugger.restartSession", "when": "debugType == 'android-java'" }
       ],
       "explorer/context": [
         {
-          "command": "debugger-for-android.markSourceDir",
-          "when": "explorerResourceIsFolder && !(resourcePath in debugger-for-android.sourceDirPaths)",
+          "command": "vscode-android-debugger.markSourceDir",
+          "when": "explorerResourceIsFolder && !(resourcePath in vscode-android-debugger.sourceDirPaths)",
           "group": "androidDebug@10"
         },
         {
-          "command": "debugger-for-android.unmarkSourceDir",
-          "when": "explorerResourceIsFolder && resourcePath in debugger-for-android.sourceDirPaths",
+          "command": "vscode-android-debugger.unmarkSourceDir",
+          "when": "explorerResourceIsFolder && resourcePath in vscode-android-debugger.sourceDirPaths",
           "group": "androidDebug@11"
         }
       ],
       "view/item/context": [
         {
-          "command": "debugger-for-android.revealInExplorer",
-          "when": "viewItem == dir && view == debugger-for-android.sourceDirs",
+          "command": "vscode-android-debugger.revealInExplorer",
+          "when": "viewItem == dir && view == vscode-android-debugger.sourceDirs",
           "group": "navigation@1"
         },
         {
-          "command": "debugger-for-android.unmarkFromDir",
-          "when": "viewItem == dir && view == debugger-for-android.sourceDirs",
+          "command": "vscode-android-debugger.unmarkFromDir",
+          "when": "viewItem == dir && view == vscode-android-debugger.sourceDirs",
           "group": "navigation@2"
         }
       ],
       "view/title": [
         {
-          "command": "debugger-for-android.attach",
-          "when": "view == debugger-for-android.sourceDirs",
+          "command": "vscode-android-debugger.attach",
+          "when": "view == vscode-android-debugger.sourceDirs",
           "group": "navigation",
           "icon": "$(debug-alt)"
         }
@@ -123,16 +123,16 @@
     "viewsContainers": {
       "activitybar": [
       {
-        "id": "debugger-for-android-explorer",
+        "id": "vscode-android-debugger-explorer",
         "title": "%viewsContainer.title%",
         "icon": "resources/icon_android.svg"
       }
       ]
     },
     "views": {
-      "debugger-for-android-explorer": [
+      "vscode-android-debugger-explorer": [
         {
-          "id": "debugger-for-android.sourceDirs",
+          "id": "vscode-android-debugger.sourceDirs",
           "name": "%views.sourceDirs.title%",
           "icon": "resources/icon_android.svg"
         }
@@ -141,17 +141,17 @@
     "configuration": {
       "title": "%config.title%",
       "properties": {
-        "debugger-for-android.adbPath": {
+        "vscode-android-debugger.adbPath": {
           "type": "string",
           "default": "auto",
           "description": "%config.adbPath.description%"
         },
-        "debugger-for-android.javaPath": {
+        "vscode-android-debugger.javaPath": {
           "type": "string",
           "default": "auto",
           "description": "%config.javaPath.description%"
         },
-        "debugger-for-android.index.maxFiles": {
+        "vscode-android-debugger.index.maxFiles": {
           "type": "number",
           "default": 10000,
           "minimum": 100,
